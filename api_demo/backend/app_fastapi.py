@@ -3,7 +3,6 @@ import socketio
 import threading
 import asyncio
 import rospy
-import time
 import sensor_msgs.point_cloud2 as pc2
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -116,22 +115,6 @@ templates = Jinja2Templates(directory=template_dir)
 async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-@app.get("/health")
-async def health():
-    return {
-        "ros_node_initialized": rospy.core.is_initialized(),
-        "topics": {
-            "map": rospy.get_published_topics() is not None,
-            "cloud_registered": True
-        },
-        "data_counts": {
-            "global_points_bytes": len(latest_data.get("global_points", b"")) if isinstance(latest_data.get("global_points"), (bytes, bytearray)) else 0,
-            "cur_scan_bytes": len(latest_data.get("cur_scan", b"")) if isinstance(latest_data.get("cur_scan"), (bytes, bytearray)) else 0,
-            "cloud_registered_bytes": len(latest_data.get("cloud_registered", b"")) if isinstance(latest_data.get("cloud_registered"), (bytes, bytearray)) else 0,
-            "path_points": len(latest_data.get("path", []))
-        }
-    }
-
 @sio.event
 async def connect(sid, environ):
     print(f"Client connected: {sid}")
@@ -156,10 +139,6 @@ async def broadcast_loop():
     while True:
         # In a real high-perf scenario, we'd use events/queues. 
         # Polling global vars is simple for this demo.
-        try:
-            pass
-        except Exception as e:
-            print("broadcast_loop error:", e)
         if latest_data["localization"]:
             await sio.emit('localization', latest_data["localization"])
         
