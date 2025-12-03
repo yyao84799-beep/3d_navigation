@@ -3,6 +3,7 @@ import socketio
 import threading
 import asyncio
 import rospy
+import time
 import sensor_msgs.point_cloud2 as pc2
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -17,7 +18,8 @@ latest_data = {
     "global_points": [],
     "localization": None,
     "cur_scan": [],
-    "path": []
+    "path": [],
+    "cloud_registered": []
 }
 
 import numpy as np
@@ -65,6 +67,15 @@ def cur_scan_callback(msg):
          
     latest_data["cur_scan"] = points_np.tobytes()
 
+def cloud_registered_callback(msg):
+    points_gen = pc2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True)
+    points_np = np.array(list(points_gen), dtype=np.float32)
+    
+    if points_np.shape[0] > 50000:
+         points_np = points_np[::points_np.shape[0] // 50000]
+         
+    latest_data["cloud_registered"] = points_np.tobytes()
+
 def path_callback(msg):
     poses = []
     for pose_stamped in msg.poses:
@@ -77,6 +88,7 @@ def ros_thread_entry():
     rospy.Subscriber('/map', PointCloud2, global_points_callback)
     rospy.Subscriber('/localization', Odometry, localization_callback)
     rospy.Subscriber('/cur_scan_in_map', PointCloud2, cur_scan_callback)
+    rospy.Subscriber('/cloud_registered', PointCloud2, cloud_registered_callback)
     rospy.Subscriber('/pct_path', Path, path_callback)
     rospy.spin()
 
@@ -104,6 +116,22 @@ templates = Jinja2Templates(directory=template_dir)
 async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
+@app.get("/health")
+async def health():
+    return {
+        "ros_node_initialized": rospy.core.is_initialized(),
+        "topics": {
+            "map": rospy.get_published_topics() is not None,
+            "cloud_registered": True
+        },
+        "data_counts": {
+            "global_points_bytes": len(latest_data.get("global_points", b"")) if isinstance(latest_data.get("global_points"), (bytes, bytearray)) else 0,
+            "cur_scan_bytes": len(latest_data.get("cur_scan", b"")) if isinstance(latest_data.get("cur_scan"), (bytes, bytearray)) else 0,
+            "cloud_registered_bytes": len(latest_data.get("cloud_registered", b"")) if isinstance(latest_data.get("cloud_registered"), (bytes, bytearray)) else 0,
+            "path_points": len(latest_data.get("path", []))
+        }
+    }
+
 @sio.event
 async def connect(sid, environ):
     print(f"Client connected: {sid}")
@@ -114,6 +142,8 @@ async def connect(sid, environ):
         await sio.emit('localization', latest_data["localization"], room=sid)
     if latest_data["cur_scan"]:
         await sio.emit('cur_scan', latest_data["cur_scan"], room=sid)
+    if latest_data["cloud_registered"]:
+        await sio.emit('cloud_registered', latest_data["cloud_registered"], room=sid)
     if latest_data["path"]:
         await sio.emit('path', {'path': latest_data["path"]}, room=sid)
 
@@ -126,12 +156,19 @@ async def broadcast_loop():
     while True:
         # In a real high-perf scenario, we'd use events/queues. 
         # Polling global vars is simple for this demo.
+        try:
+            pass
+        except Exception as e:
+            print("broadcast_loop error:", e)
         if latest_data["localization"]:
             await sio.emit('localization', latest_data["localization"])
         
         if latest_data["cur_scan"]:
              await sio.emit('cur_scan', latest_data["cur_scan"])
              
+        if latest_data["cloud_registered"]:
+             await sio.emit('cloud_registered', latest_data["cloud_registered"])
+
         if latest_data["path"]:
             await sio.emit('path', {'path': latest_data["path"]})
             

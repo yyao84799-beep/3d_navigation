@@ -15,7 +15,7 @@ class LocalPlanner:
 
         # 参数设置
         self.lookahead_distance = 0.5   # 前瞻距离（单位：米）
-        self.max_speed = 1.5            # 最大线速度（m/s）
+        self.max_speed = 4           # 最大线速度（m/s）
         self.kp_angular = 0.2            # 转向角比例系数
         self.last_speed = 0.0
         self.MAX_ACCEL = 0.3  # m/s²

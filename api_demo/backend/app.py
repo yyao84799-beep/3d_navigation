@@ -19,6 +19,7 @@ latest_global_points = None
 latest_localization = None
 latest_cur_scan = None
 latest_path = None
+latest_cloud_registered = None
 
 # ROS callbacks
 def global_points_callback(msg):
@@ -68,6 +69,21 @@ def cur_scan_callback(msg):
     latest_cur_scan = points
     socketio.emit('cur_scan', {'points': points})
 
+def cloud_registered_callback(msg):
+    global latest_cloud_registered
+    points = []
+    # Parse PointCloud2
+    for p in pc2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True):
+        points.append({"x": p[0], "y": p[1], "z": p[2]})
+        
+    # Sample if too large
+    if len(points) > 10000:
+        step = len(points) // 10000
+        points = points[::step]
+        
+    latest_cloud_registered = points
+    socketio.emit('cloud_registered', {'points': points})
+
 def path_callback(msg):
     global latest_path
     poses = []
@@ -86,6 +102,7 @@ def ros_thread():
     rospy.Subscriber('/global_points', PointCloud2, global_points_callback)
     rospy.Subscriber('/localization', Odometry, localization_callback)
     rospy.Subscriber('/cur_scan_in_map', PointCloud2, cur_scan_callback)
+    rospy.Subscriber('/cloud_registered', PointCloud2, cloud_registered_callback)
     rospy.Subscriber('/pct_path', Path, path_callback)
     
     rospy.spin()
@@ -105,6 +122,8 @@ def handle_connect():
         emit('localization', latest_localization)
     if latest_cur_scan:
         emit('cur_scan', {'points': latest_cur_scan})
+    if latest_cloud_registered:
+        emit('cloud_registered', {'points': latest_cloud_registered})
     if latest_path:
         emit('path', {'path': latest_path})
 

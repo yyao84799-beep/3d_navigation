@@ -13,7 +13,7 @@
             background: rgba(0, 0, 0, 0.7);
             padding: 10px;
             border-radius: 5px;
-            pointer-events: none;
+            pointer-events: auto;
         }
         #container { width: 100vw; height: 100vh; }
         .status-item { margin-bottom: 5px; }
@@ -41,19 +41,38 @@
             <span id="connection-status" class="status-value" style="color: #f00">Disconnected</span>
         </div>
         <div class="status-item">
-            <span class="status-label">Localization:</span>
+            <label>
+                <input type="checkbox" id="toggle-loc" checked> 
+                <span class="status-label">Localization:</span>
+            </label>
             <span id="loc-pos" class="status-value">N/A</span>
         </div>
         <div class="status-item">
-            <span class="status-label">Global Points:</span>
+            <label>
+                <input type="checkbox" id="toggle-global" checked>
+                <span class="status-label">Global Points:</span>
+            </label>
             <span id="global-points-count" class="status-value">0</span>
         </div>
         <div class="status-item">
-            <span class="status-label">Current Scan:</span>
+            <label>
+                <input type="checkbox" id="toggle-scan" checked>
+                <span class="status-label">Current Scan:</span>
+            </label>
             <span id="cur-scan-count" class="status-value">0</span>
         </div>
         <div class="status-item">
-            <span class="status-label">Path Points:</span>
+            <label>
+                <input type="checkbox" id="toggle-registered" checked>
+                <span class="status-label">Registered Cloud:</span>
+            </label>
+            <span id="cloud-registered-count" class="status-value">0</span>
+        </div>
+        <div class="status-item">
+            <label>
+                <input type="checkbox" id="toggle-path" checked>
+                <span class="status-label">Path Points:</span>
+            </label>
             <span id="path-count" class="status-value">0</span>
         </div>
     </div>
@@ -92,9 +111,111 @@
         // Objects storage
         let globalPointsCloud = null;
         let curScanCloud = null;
+        let cloudRegisteredCloud = null;
         let robotMesh = null;
         let pathLine = null;
-        const DISABLE_LIDAR_SCAN = true;
+        const DISABLE_LIDAR_SCAN = true; // This seems to be a hardcoded flag, maybe we can use the checkbox instead
+
+        // Toggles
+        const toggleLoc = document.getElementById('toggle-loc');
+        const toggleGlobal = document.getElementById('toggle-global');
+        const toggleScan = document.getElementById('toggle-scan');
+        const toggleRegistered = document.getElementById('toggle-registered');
+        const togglePath = document.getElementById('toggle-path');
+
+        toggleLoc.addEventListener('change', (e) => {
+            if (robotMesh) robotMesh.visible = e.target.checked;
+        });
+        toggleGlobal.addEventListener('change', (e) => {
+            if (globalPointsCloud) globalPointsCloud.visible = e.target.checked;
+        });
+        toggleScan.addEventListener('change', (e) => {
+            if (curScanCloud) curScanCloud.visible = e.target.checked;
+        });
+        toggleRegistered.addEventListener('change', (e) => {
+            if (cloudRegisteredCloud) cloudRegisteredCloud.visible = e.target.checked;
+        });
+        togglePath.addEventListener('change', (e) => {
+            if (pathLine) pathLine.visible = e.target.checked;
+        });
+
+        function toFloat32(payload) {
+            if (payload && payload.points && Array.isArray(payload.points)) {
+                const n = payload.points.length;
+                const arr = new Float32Array(n * 3);
+                for (let i = 0; i < n; i++) {
+                    const p = payload.points[i];
+                    arr[i * 3] = p.x;
+                    arr[i * 3 + 1] = p.y;
+                    arr[i * 3 + 2] = p.z;
+                }
+                return arr;
+            }
+            if (payload instanceof ArrayBuffer) {
+                return new Float32Array(payload);
+            }
+            if (payload && payload.buffer && payload.byteLength !== undefined) {
+                return new Float32Array(payload.buffer, payload.byteOffset || 0, Math.floor(payload.byteLength / 4));
+            }
+            if (typeof payload === 'string') {
+                try {
+                    const bstr = atob(payload);
+                    const buf = new ArrayBuffer(bstr.length);
+                    const view = new Uint8Array(buf);
+                    for (let i = 0; i < bstr.length; i++) view[i] = bstr.charCodeAt(i);
+                    return new Float32Array(buf);
+                } catch (e) {
+                    return null;
+                }
+            }
+            if (Array.isArray(payload) && typeof payload[0] === 'number') {
+                return new Float32Array(payload);
+            }
+            return null;
+        }
+
+        async function toFloat32Async(payload) {
+            if (payload instanceof Blob) {
+                const buf = await payload.arrayBuffer();
+                return new Float32Array(buf);
+            }
+            return toFloat32(payload);
+        }
+
+        function fitView(positions) {
+            if (!positions || positions.length < 3) return;
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.computeBoundingSphere();
+            const c = geometry.boundingSphere.center;
+            const r = geometry.boundingSphere.radius;
+            controls.target.set(c.x, c.y, c.z);
+            const k = 2.5;
+            camera.position.set(c.x + r * k, c.y + r * k, c.z + r * k);
+        }
+
+        const VOXEL_SIZE = 0.1;
+        let cloudRegisteredVoxelMap = new Map();
+        function accumulateVoxel(positions) {
+            for (let i = 0; i < positions.length; i += 3) {
+                const x = positions[i];
+                const y = positions[i + 1];
+                const z = positions[i + 2];
+                const vx = Math.floor(x / VOXEL_SIZE);
+                const vy = Math.floor(y / VOXEL_SIZE);
+                const vz = Math.floor(z / VOXEL_SIZE);
+                const key = vx + ',' + vy + ',' + vz;
+                if (!cloudRegisteredVoxelMap.has(key)) cloudRegisteredVoxelMap.set(key, [x, y, z]);
+            }
+            const out = new Float32Array(cloudRegisteredVoxelMap.size * 3);
+            let idx = 0;
+            for (const p of cloudRegisteredVoxelMap.values()) {
+                out[idx++] = p[0];
+                out[idx++] = p[1];
+                out[idx++] = p[2];
+            }
+            return out;
+        }
 
         // Socket.io connection
         // Connect to the same host that served the page
@@ -122,21 +243,20 @@
             console.log('Disconnected from server');
         });
 
-        socket.on('global_points', (data) => {
+        socket.on('global_points', async (data) => {
             if (globalPointsCloud) scene.remove(globalPointsCloud);
-            const float32View = new Float32Array(data);
-            const numPoints = float32View.length / 3;
+            const positions = await toFloat32Async(data);
+            if (!positions) return;
+            const numPoints = positions.length / 3;
             document.getElementById('global-points-count').textContent = numPoints;
             const geometry = new THREE.BufferGeometry();
-            geometry.setAttribute('position', new THREE.BufferAttribute(float32View, 3));
-            const material = new THREE.PointsMaterial({ 
-                color: 0x888888, 
-                size: 0.05,
-                sizeAttenuation: true 
-            });
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            const material = new THREE.PointsMaterial({ color: 0x888888, size: 0.05, sizeAttenuation: true });
             globalPointsCloud = new THREE.Points(geometry, material);
             globalPointsCloud.rotation.x = -Math.PI / 2;
+            globalPointsCloud.visible = toggleGlobal.checked;
             scene.add(globalPointsCloud);
+            if (toggleGlobal.checked) fitView(positions);
         });
 
         // Handle Localization (Robot Position)
@@ -153,6 +273,7 @@
                 // Add direction arrow
                 const arrowHelper = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), 1, 0xffff00);
                 robotMesh.add(arrowHelper);
+                robotMesh.visible = toggleLoc.checked;
                 scene.add(robotMesh);
             }
             
@@ -174,25 +295,46 @@
             // camera.lookAt(pos.x, pos.z, -pos.y);
         });
 
-        socket.on('cur_scan', (data) => {
+        socket.on('cur_scan', async (data) => {
             if (curScanCloud) {
                 scene.remove(curScanCloud);
                 curScanCloud = null;
             }
-            const float32View = new Float32Array(data);
-            const numPoints = float32View.length / 3;
+            if (!toggleScan.checked) return;
+            const positions = await toFloat32Async(data);
+            if (!positions) return;
+            const numPoints = positions.length / 3;
             document.getElementById('cur-scan-count').textContent = numPoints;
-            if (DISABLE_LIDAR_SCAN) return;
             const geometry = new THREE.BufferGeometry();
-            geometry.setAttribute('position', new THREE.BufferAttribute(float32View, 3));
-            const material = new THREE.PointsMaterial({ 
-                color: 0xff0000, 
-                size: 0.08,
-                sizeAttenuation: true 
-            });
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            const material = new THREE.PointsMaterial({ color: 0xff0000, size: 0.08, sizeAttenuation: true });
             curScanCloud = new THREE.Points(geometry, material);
             curScanCloud.rotation.x = -Math.PI / 2;
+            curScanCloud.visible = toggleScan.checked;
             scene.add(curScanCloud);
+            fitView(positions);
+        });
+
+        socket.on('cloud_registered', async (data) => {
+            const incoming = await toFloat32Async(data);
+            if (!incoming) return;
+            const aggregated = accumulateVoxel(incoming);
+            const numPoints = aggregated.length / 3;
+            document.getElementById('cloud-registered-count').textContent = numPoints;
+            if (!cloudRegisteredCloud) {
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.BufferAttribute(aggregated, 3));
+                const material = new THREE.PointsMaterial({ color: 0x00ff00, size: 0.05, sizeAttenuation: true });
+                cloudRegisteredCloud = new THREE.Points(geometry, material);
+                cloudRegisteredCloud.rotation.x = -Math.PI / 2;
+                cloudRegisteredCloud.visible = toggleRegistered.checked;
+                scene.add(cloudRegisteredCloud);
+            } else {
+                cloudRegisteredCloud.geometry.setAttribute('position', new THREE.BufferAttribute(aggregated, 3));
+                cloudRegisteredCloud.geometry.attributes.position.needsUpdate = true;
+                cloudRegisteredCloud.visible = toggleRegistered.checked;
+            }
+            if (toggleRegistered.checked) fitView(aggregated);
         });
 
         // Handle Path
@@ -211,6 +353,7 @@
             const material = new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 2 });
             
             pathLine = new THREE.Line(geometry, material);
+            pathLine.visible = togglePath.checked;
             scene.add(pathLine);
         });
 
