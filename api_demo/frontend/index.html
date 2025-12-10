@@ -5,20 +5,104 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ROS Web Visualizer</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #111; color: #fff; font-family: Arial, sans-serif; }
+        body { margin: 0; overflow: hidden; background-color: #111; color: #fff; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
         #info {
             position: absolute;
-            top: 10px;
-            left: 10px;
-            background: rgba(0, 0, 0, 0.7);
-            padding: 10px;
-            border-radius: 5px;
+            top: 20px;
+            left: 20px;
+            width: 320px;
+            background: rgba(20, 20, 25, 0.85);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            border-radius: 12px;
             pointer-events: auto;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: transform 0.3s ease;
+            max-height: 90vh;
+            overflow-y: auto;
         }
-        #container { width: 100vw; height: 100vh; }
-        .status-item { margin-bottom: 5px; }
-        .status-label { font-weight: bold; color: #aaa; }
-        .status-value { color: #fff; }
+        #info h3 {
+            margin: 0 0 15px 0;
+            font-size: 1.2em;
+            color: #fff;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .status-group {
+            margin-bottom: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 10px;
+            border-radius: 8px;
+        }
+        .status-group-title {
+            font-size: 0.85em;
+            text-transform: uppercase;
+            color: #888;
+            margin-bottom: 8px;
+            letter-spacing: 1px;
+        }
+        .status-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 0.9em;
+        }
+        .status-item:last-child { margin-bottom: 0; }
+        .status-label { color: #ccc; }
+        .status-value { color: #fff; font-family: monospace; background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px; }
+        
+        /* Custom Checkbox */
+        label { display: flex; align-items: center; cursor: pointer; }
+        input[type="checkbox"] {
+            accent-color: #2196F3;
+            margin-right: 8px;
+            cursor: pointer;
+        }
+
+        /* Inputs and Buttons */
+        input[type="number"] {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #fff;
+            border-radius: 4px;
+            padding: 4px 6px;
+            width: 60px;
+            font-family: monospace;
+        }
+        input[type="number"]:focus {
+            outline: none;
+            border-color: #2196F3;
+        }
+        button {
+            background: #2196F3;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        button:hover { background: #1976D2; }
+        button:active { transform: translateY(1px); }
+        
+        .control-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+            align-items: center;
+        }
+        .mini-label { font-size: 0.8em; color: #888; width: 15px; }
+        
+        /* Scrollbar */
+        #info::-webkit-scrollbar { width: 6px; }
+        #info::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); }
+        #info::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
     </style>
     <!-- Import maps polyfill -->
     <script async src="/static/js/es-module-shims.js"></script>
@@ -36,44 +120,148 @@
 <body>
     <div id="info">
         <h3>ROS Visualizer</h3>
-        <div class="status-item">
-            <span class="status-label">Status:</span>
-            <span id="connection-status" class="status-value" style="color: #f00">Disconnected</span>
+        
+        <div class="status-group">
+            <div class="status-group-title">System Status</div>
+            <div class="status-item">
+                <span class="status-label">Connection</span>
+                <span id="connection-status" class="status-value" style="color: #f00">Disconnected</span>
+            </div>
         </div>
-        <div class="status-item">
-            <label>
-                <input type="checkbox" id="toggle-loc" checked> 
-                <span class="status-label">Localization:</span>
-            </label>
-            <span id="loc-pos" class="status-value">N/A</span>
+
+        <div class="status-group">
+            <div class="status-group-title">Data Layers</div>
+            
+            <div class="status-item">
+                <label>
+                    <input type="checkbox" id="toggle-global" checked>
+                    <span class="status-label">Global Map</span>
+                </label>
+                <div style="display:flex; align-items:center; gap:5px">
+                    <span id="global-points-count" class="status-value">0</span>
+                    <button id="btn-req-global" style="padding:2px 6px; font-size:0.8em">↻</button>
+                </div>
+            </div>
+
+            <div class="status-item">
+                <label>
+                    <input type="checkbox" id="toggle-registered" checked>
+                    <span class="status-label">Registered Cloud</span>
+                </label>
+                <span id="cloud-registered-count" class="status-value">0</span>
+            </div>
+
+            <div class="status-item">
+                <label>
+                    <input type="checkbox" id="toggle-map-box" checked>
+                    <span class="status-label">Map Submap Box</span>
+                </label>
+            </div>
+            <div class="status-item">
+                <label>
+                    <input type="checkbox" id="toggle-scan-box" checked>
+                    <span class="status-label">Scan Submap Box</span>
+                </label>
+            </div>
+            
+            <!-- Cloud Rotation Controls -->
+            <div class="control-row" style="justify-content: flex-end; margin-bottom: 8px;">
+                <span class="mini-label">X</span> <input type="number" id="rot-x" value="-90" step="1" style="width:40px">
+                <span class="mini-label">Y</span> <input type="number" id="rot-y" value="0" step="1" style="width:40px">
+                <span class="mini-label">Z</span> <input type="number" id="rot-z" value="0" step="1" style="width:40px">
+                <button id="btn-apply-rot" style="padding:2px 8px; font-size:0.8em">Set</button>
+            </div>
+
+            <div class="status-item">
+                <label>
+                    <input type="checkbox" id="toggle-path" checked>
+                    <span class="status-label">Path</span>
+                </label>
+                <span id="path-count" class="status-value">0</span>
+            </div>
+
+            <div class="status-item">
+                <label>
+                    <input type="checkbox" id="toggle-loc" checked> 
+                    <span class="status-label">Robot Model</span>
+                </label>
+                <span id="loc-pos" class="status-value" style="font-size:0.8em">N/A</span>
+            </div>
         </div>
-        <div class="status-item">
-            <label>
-                <input type="checkbox" id="toggle-global" checked>
-                <span class="status-label">Global Points:</span>
-            </label>
-            <span id="global-points-count" class="status-value">0</span>
+
+        <div class="status-group">
+            <div class="status-group-title">Initial Pose</div>
+            <div style="font-size:0.85em; color:#888; margin-bottom:8px; line-height:1.4">
+                Shift + Drag on map to set pose & direction.
+            </div>
+            <div class="control-row">
+                <span class="mini-label">X</span> <input type="number" id="init-x" value="0" step="0.01">
+                <span class="mini-label">Y</span> <input type="number" id="init-y" value="0" step="0.01">
+            </div>
+            <div class="control-row">
+                <span class="mini-label">Z</span> <input type="number" id="init-z" value="0" step="0.01">
+                <span class="mini-label">Yaw</span> <input type="number" id="init-yaw" value="0" step="1">
+            </div>
+            <div class="control-row" style="margin-top:12px">
+                <button id="btn-send-initialpose" style="width:100%">Send Pose</button>
+            </div>
         </div>
-        <div class="status-item">
-            <label>
-                <input type="checkbox" id="toggle-scan" checked>
-                <span class="status-label">Current Scan:</span>
-            </label>
-            <span id="cur-scan-count" class="status-value">0</span>
+
+        <div class="status-group">
+            <div class="status-group-title">Clicked Point</div>
+            <div style="font-size:0.85em; color:#888; margin-bottom:8px; line-height:1.4">
+                Ctrl + Click on map to select point.
+            </div>
+            <div class="control-row">
+                <span class="mini-label">X</span> <input type="number" id="click-x" value="0" step="0.01">
+                <span class="mini-label">Y</span> <input type="number" id="click-y" value="0" step="0.01">
+                <span class="mini-label">Z</span> <input type="number" id="click-z" value="0" step="0.01">
+            </div>
+            <div class="control-row" style="margin-top:12px; display: flex; gap: 5px;">
+                <button id="btn-send-clickpoint" style="flex: 1; background-color: #2196F3;">Go Now</button>
+                <button id="btn-queue-clickpoint" style="flex: 1; background-color: #9C27B0;">Add to Queue</button>
+            </div>
+            <div class="control-row" style="margin-top:8px;">
+                 <div style="font-size:0.85em; color:#ccc;">Queue: <span id="queue-count">0</span> points</div>
+                 <div style="margin-left:auto; display:flex; gap:5px">
+                    <button id="btn-start-queue" style="padding: 2px 8px; font-size: 0.8em; background-color: #4CAF50;">Run Queue</button>
+                    <button id="btn-clear-queue" style="padding: 2px 8px; font-size: 0.8em; background-color: #666;">Clear</button>
+                 </div>
+            </div>
         </div>
-        <div class="status-item">
-            <label>
-                <input type="checkbox" id="toggle-registered" checked>
-                <span class="status-label">Registered Cloud:</span>
-            </label>
-            <span id="cloud-registered-count" class="status-value">0</span>
+
+        <div class="status-group">
+            <div class="status-group-title">Mission Control</div>
+            <div class="status-item">
+                <span class="status-label">Status</span>
+                <span id="mission-status" class="status-value" style="color: #aaa">Idle</span>
+            </div>
+            <div class="control-row" style="margin-top:8px; justify-content: space-between;">
+                <button id="btn-start-motion" style="width:48%; background-color: #4CAF50;">Start</button>
+                <button id="btn-stop-motion" style="width:48%; background-color: #f44336;">Stop</button>
+            </div>
         </div>
-        <div class="status-item">
-            <label>
-                <input type="checkbox" id="toggle-path" checked>
-                <span class="status-label">Path Points:</span>
-            </label>
-            <span id="path-count" class="status-value">0</span>
+
+        <div class="status-group">
+            <div class="status-group-title">View Options</div>
+            <div class="status-item">
+                <label>
+                    <input type="checkbox" id="toggle-free-view" checked>
+                    <span class="status-label">Free Camera</span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Hidden elements kept for logic compatibility -->
+        <div style="display:none">
+            <input type="checkbox" id="toggle-scan">
+            <span id="cur-scan-count">0</span>
+            <input type="checkbox" id="recv-global" checked>
+            <input type="checkbox" id="recv-scan">
+            <input type="checkbox" id="recv-registered" checked>
+            <input type="checkbox" id="recv-path" checked>
+            <input type="checkbox" id="recv-loc" checked>
+            <input type="checkbox" id="scan-follow">
         </div>
     </div>
     <div id="container"></div>
@@ -102,11 +290,20 @@
         // Renderer setup
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(1.5, window.devicePixelRatio));
         document.getElementById('container').appendChild(renderer.domElement);
 
         // Controls
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
+        controls.enableZoom = true;
+        controls.enableRotate = true;
+        controls.enablePan = true;
+        controls.minDistance = 0.1;
+        controls.maxDistance = 2000;
+        controls.zoomSpeed = 1.2;
+        controls.rotateSpeed = 0.7;
+        controls.panSpeed = 0.8;
 
         // Objects storage
         let globalPointsCloud = null;
@@ -114,14 +311,164 @@
         let cloudRegisteredCloud = null;
         let robotMesh = null;
         let pathLine = null;
+        let targetPointMesh = null; // New: Target point visualization
+        let mapBoxMesh = null;
+        let scanBoxMesh = null;
+
+        let isFirstGlobalPoints = true;
+        let isFirstCurScan = true;
+        let isFirstRegisteredCloud = true;
         const DISABLE_LIDAR_SCAN = true; // This seems to be a hardcoded flag, maybe we can use the checkbox instead
+        const lastTs = { global_points: 0, cur_scan: 0, cloud_registered: 0, path: 0, localization: 0 };
+        const minInterval = { global_points: 1000, cur_scan: 100, cloud_registered: 300, path: 200, localization: 16 };
 
         // Toggles
         const toggleLoc = document.getElementById('toggle-loc');
         const toggleGlobal = document.getElementById('toggle-global');
         const toggleScan = document.getElementById('toggle-scan');
         const toggleRegistered = document.getElementById('toggle-registered');
+        const toggleMapBox = document.getElementById('toggle-map-box');
+        const toggleScanBox = document.getElementById('toggle-scan-box');
         const togglePath = document.getElementById('toggle-path');
+        const toggleFreeView = document.getElementById('toggle-free-view');
+        const recvGlobal = document.getElementById('recv-global');
+        // const recvScan = document.getElementById('recv-scan'); // Removed
+        const recvRegistered = document.getElementById('recv-registered');
+        const recvPath = document.getElementById('recv-path');
+        const recvLoc = document.getElementById('recv-loc');
+        // const toggleScanFollow = document.getElementById('scan-follow'); // Removed
+        let lastLocPos = null;
+        const btnSendInitialPose = document.getElementById('btn-send-initialpose');
+        const btnApplyRot = document.getElementById('btn-apply-rot');
+        const rotXEl = document.getElementById('rot-x');
+        const rotYEl = document.getElementById('rot-y');
+        const rotZEl = document.getElementById('rot-z');
+        let manualRot = { x: -90, y: 0, z: 0 };
+
+        // Socket.io connection
+        // Connect to the same host that served the page
+        console.log('Attempting to connect to:', window.location.origin);
+        const socket = io(window.location.origin, {
+            transports: ['websocket', 'polling'] // Force explicit transports to avoid potential DNS issues with some auto-discovery
+        });
+        const statusEl = document.getElementById('connection-status');
+
+        const btnReqGlobal = document.getElementById('btn-req-global');
+        if (btnReqGlobal) {
+            btnReqGlobal.addEventListener('click', () => {
+                // Clear existing map first to give visual feedback
+                if (globalPointsCloud) {
+                    scene.remove(globalPointsCloud);
+                    globalPointsCloud.geometry.dispose();
+                    globalPointsCloud.material.dispose();
+                    globalPointsCloud = null;
+                }
+                document.getElementById('global-points-count').textContent = 'Loading...';
+                
+                // Request new map from server
+                socket.emit('request_global_points');
+            });
+        }
+
+        if (btnApplyRot) {
+            btnApplyRot.addEventListener('click', () => {
+                manualRot.x = parseFloat(rotXEl.value) || 0;
+                manualRot.y = parseFloat(rotYEl.value) || 0;
+                manualRot.z = parseFloat(rotZEl.value) || 0;
+            });
+        }
+
+        const btnSendClickPoint = document.getElementById('btn-send-clickpoint');
+        const btnQueueClickPoint = document.getElementById('btn-queue-clickpoint');
+        const btnClearQueue = document.getElementById('btn-clear-queue');
+        const btnStartQueue = document.getElementById('btn-start-queue');
+        const queueCountEl = document.getElementById('queue-count');
+        const clickXEl = document.getElementById('click-x');
+        const clickYEl = document.getElementById('click-y');
+        const clickZEl = document.getElementById('click-z');
+        const btnStartMotion = document.getElementById('btn-start-motion');
+        const btnStopMotion = document.getElementById('btn-stop-motion');
+        const missionStatusEl = document.getElementById('mission-status');
+
+        if (btnStartMotion) {
+            btnStartMotion.addEventListener('click', () => {
+                try {
+                    socket.emit('set_motion_control', { enabled: true });
+                    missionStatusEl.textContent = 'Moving';
+                    missionStatusEl.style.color = '#4CAF50';
+                } catch (e) {}
+            });
+        }
+
+        if (btnStopMotion) {
+            btnStopMotion.addEventListener('click', () => {
+                try {
+                    socket.emit('set_motion_control', { enabled: false });
+                    missionStatusEl.textContent = 'Stopped';
+                    missionStatusEl.style.color = '#f44336';
+                } catch (e) {}
+            });
+        }
+
+        if (btnSendClickPoint) {
+            btnSendClickPoint.addEventListener('click', () => {
+                const x = parseFloat(clickXEl.value) || 0;
+                const y = parseFloat(clickYEl.value) || 0;
+                const z = parseFloat(clickZEl.value) || 0;
+                try {
+                    socket.emit('set_clicked_point', { x, y, z, enqueue: false });
+                    // Also enable motion when new point is sent (optional, but convenient)
+                    // socket.emit('set_motion_control', { enabled: true });
+                    missionStatusEl.textContent = 'Target Sent';
+                    missionStatusEl.style.color = '#FFC107';
+                } catch (e) {}
+            });
+        }
+
+        if (btnQueueClickPoint) {
+            btnQueueClickPoint.addEventListener('click', () => {
+                const x = parseFloat(clickXEl.value) || 0;
+                const y = parseFloat(clickYEl.value) || 0;
+                const z = parseFloat(clickZEl.value) || 0;
+                try {
+                    socket.emit('set_clicked_point', { x, y, z, enqueue: true });
+                    // Visual feedback
+                    const originalText = btnQueueClickPoint.textContent;
+                    btnQueueClickPoint.textContent = "Added!";
+                    setTimeout(() => btnQueueClickPoint.textContent = originalText, 1000);
+                } catch (e) {}
+            });
+        }
+
+        if (btnClearQueue) {
+            btnClearQueue.addEventListener('click', () => {
+                socket.emit('clear_waypoint_queue');
+            });
+        }
+
+        if (btnStartQueue) {
+            btnStartQueue.addEventListener('click', () => {
+                socket.emit('start_queue');
+                // Also enable motion
+                socket.emit('set_motion_control', { enabled: true });
+            });
+        }
+
+        const initXEl = document.getElementById('init-x');
+        const initYEl = document.getElementById('init-y');
+        const initZEl = document.getElementById('init-z');
+        const initYawEl = document.getElementById('init-yaw');
+        if (btnSendInitialPose) {
+            btnSendInitialPose.addEventListener('click', () => {
+                const x = parseFloat(initXEl.value) || 0;
+                const y = parseFloat(initYEl.value) || 0;
+                const z = parseFloat(initZEl.value) || 0;
+                const yaw_deg = parseFloat(initYawEl.value) || 0;
+                try {
+                    socket.emit('set_initialpose', { x, y, z, yaw_deg });
+                } catch (e) {}
+            });
+        }
 
         toggleLoc.addEventListener('change', (e) => {
             if (robotMesh) robotMesh.visible = e.target.checked;
@@ -130,13 +477,58 @@
             if (globalPointsCloud) globalPointsCloud.visible = e.target.checked;
         });
         toggleScan.addEventListener('change', (e) => {
-            if (curScanCloud) curScanCloud.visible = e.target.checked;
+            // if (curScanCloud) curScanCloud.visible = e.target.checked;
         });
         toggleRegistered.addEventListener('change', (e) => {
             if (cloudRegisteredCloud) cloudRegisteredCloud.visible = e.target.checked;
         });
+        toggleMapBox.addEventListener('change', (e) => {
+            if (mapBoxMesh) mapBoxMesh.visible = e.target.checked;
+        });
+        toggleScanBox.addEventListener('change', (e) => {
+            if (scanBoxMesh) scanBoxMesh.visible = e.target.checked;
+        });
         togglePath.addEventListener('change', (e) => {
             if (pathLine) pathLine.visible = e.target.checked;
+        });
+        let freeView = toggleFreeView ? toggleFreeView.checked : true;
+        if (toggleFreeView) {
+            toggleFreeView.addEventListener('change', (e) => {
+                freeView = e.target.checked;
+                if (!freeView) {
+                    isFirstGlobalPoints = true;
+                    isFirstCurScan = true;
+                    isFirstRegisteredCloud = true;
+                }
+            });
+        }
+
+        function setReceive(topic, enabled) {
+            try {
+                socket.emit('set_receive', { topic, enabled });
+            } catch (e) {}
+        }
+
+        if (recvGlobal) recvGlobal.addEventListener('change', e => setReceive('global_points', e.target.checked));
+        // if (recvScan) recvScan.addEventListener('change', e => setReceive('cur_scan', e.target.checked));
+        if (recvRegistered) recvRegistered.addEventListener('change', e => setReceive('cloud_registered', e.target.checked));
+        if (recvPath) recvPath.addEventListener('change', e => setReceive('path', e.target.checked));
+        if (recvLoc) recvLoc.addEventListener('change', e => setReceive('localization', e.target.checked));
+
+        // Arrival Status
+        socket.on('arrival_status', (data) => {
+            if (data && data.status === 'arrived') {
+                missionStatusEl.textContent = 'Arrived';
+                missionStatusEl.style.color = '#00BCD4';
+                // Maybe auto-stop motion?
+                // socket.emit('set_motion_control', { enabled: false });
+            }
+        });
+
+        socket.on('waypoint_queue', (data) => {
+            if (data && data.queue) {
+                queueCountEl.textContent = data.queue.length;
+            }
         });
 
         function toFloat32(payload) {
@@ -194,36 +586,8 @@
             camera.position.set(c.x + r * k, c.y + r * k, c.z + r * k);
         }
 
-        const VOXEL_SIZE = 0.1;
-        let cloudRegisteredVoxelMap = new Map();
-        function accumulateVoxel(positions) {
-            for (let i = 0; i < positions.length; i += 3) {
-                const x = positions[i];
-                const y = positions[i + 1];
-                const z = positions[i + 2];
-                const vx = Math.floor(x / VOXEL_SIZE);
-                const vy = Math.floor(y / VOXEL_SIZE);
-                const vz = Math.floor(z / VOXEL_SIZE);
-                const key = vx + ',' + vy + ',' + vz;
-                if (!cloudRegisteredVoxelMap.has(key)) cloudRegisteredVoxelMap.set(key, [x, y, z]);
-            }
-            const out = new Float32Array(cloudRegisteredVoxelMap.size * 3);
-            let idx = 0;
-            for (const p of cloudRegisteredVoxelMap.values()) {
-                out[idx++] = p[0];
-                out[idx++] = p[1];
-                out[idx++] = p[2];
-            }
-            return out;
-        }
-
-        // Socket.io connection
-        // Connect to the same host that served the page
-        console.log('Attempting to connect to:', window.location.origin);
-        const socket = io(window.location.origin, {
-            transports: ['websocket', 'polling'] // Force explicit transports to avoid potential DNS issues with some auto-discovery
-        });
-        const statusEl = document.getElementById('connection-status');
+        let cloudRegisteredVoxelMap = null;
+        function accumulateVoxel(positions) { return positions; }
 
         socket.on('connect_error', (err) => {
             console.error('Connection Error:', err);
@@ -244,11 +608,25 @@
         });
 
         socket.on('global_points', async (data) => {
-            if (globalPointsCloud) scene.remove(globalPointsCloud);
+            // Always update if data is received
+            
+            const now = performance.now();
+            if (globalPointsCloud && now - lastTs.global_points < minInterval.global_points) return;
+            lastTs.global_points = now;
+            
             const positions = await toFloat32Async(data);
             if (!positions) return;
             const numPoints = positions.length / 3;
             document.getElementById('global-points-count').textContent = numPoints;
+            
+            // Remove existing cloud if present
+            if (globalPointsCloud) {
+                scene.remove(globalPointsCloud);
+                globalPointsCloud.geometry.dispose();
+                globalPointsCloud.material.dispose();
+                globalPointsCloud = null;
+            }
+
             const geometry = new THREE.BufferGeometry();
             geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
             const material = new THREE.PointsMaterial({ color: 0x888888, size: 0.05, sizeAttenuation: true });
@@ -256,13 +634,21 @@
             globalPointsCloud.rotation.x = -Math.PI / 2;
             globalPointsCloud.visible = toggleGlobal.checked;
             scene.add(globalPointsCloud);
-            if (toggleGlobal.checked) fitView(positions);
+            
+            if (!freeView && toggleGlobal.checked && isFirstGlobalPoints) {
+                fitView(positions);
+                isFirstGlobalPoints = false;
+            }
         });
 
         // Handle Localization (Robot Position)
         socket.on('localization', (data) => {
+            const now = performance.now();
+            if (now - lastTs.localization < minInterval.localization) return;
+            lastTs.localization = now;
             const pos = data.position;
             const ori = data.orientation;
+            lastLocPos = { x: pos.x, y: pos.y, z: pos.z };
             
             document.getElementById('loc-pos').textContent = `(${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)})`;
             
@@ -271,70 +657,127 @@
                 const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
                 robotMesh = new THREE.Mesh(geometry, material);
                 // Add direction arrow
-                const arrowHelper = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), 1, 0xffff00);
+                const arrowHelper = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), 0.6, 0xffff00);
                 robotMesh.add(arrowHelper);
                 robotMesh.visible = toggleLoc.checked;
                 scene.add(robotMesh);
             }
             
-            // Update position (ROS Z-up to Three Y-up)
+            // Update Robot Pose
+            // Three.js Coordinate: Y-up, ROS: Z-up
+            // Map ROS (x, y, z) to Three (x, z, -y)
             robotMesh.position.set(pos.x, pos.z, -pos.y);
-            
-            // Update orientation
-            const quaternion = new THREE.Quaternion(ori.x, ori.z, -ori.y, ori.w);
-            // This quaternion mapping might need adjustment based on exact coordinate frames
-            // For now, just position is key
-            // A simpler way is to construct rotation from quaternion directly if frames align
             
             // Let's try to just set quaternion directly but swapping axes
             // ROS (x, y, z, w) -> Three (x, z, -y, w) roughly
             robotMesh.setRotationFromQuaternion(new THREE.Quaternion(ori.x, ori.z, -ori.y, ori.w));
             
-            // Make camera follow robot if needed (optional)
-            // camera.position.set(pos.x - 5, pos.z + 5, -pos.y);
-            // camera.lookAt(pos.x, pos.z, -pos.y);
+            // TPS Follow Logic (Third Person Shooter / Follow Camera)
+            if (!freeView) {
+                // Target camera position relative to robot (Behind and Above)
+                // In ROS frame: Behind is -X, Above is +Z
+                // In Three frame (Robot local): Behind is -X (due to arrow helper pointing +X), Above is +Y (local up)
+                // But wait, robotMesh local axes depend on how we rotated it.
+                // If we used setRotationFromQuaternion, robotMesh local X is Robot Front.
+                
+                // Let's calculate offset in World Space to be safe and smooth
+                const offsetDist = 3.0; // Distance behind
+                const offsetHeight = 2.0; // Height above
+                
+                // Get robot direction in world space
+                const robotDir = new THREE.Vector3(1, 0, 0);
+                robotDir.applyQuaternion(robotMesh.quaternion);
+                robotDir.y = 0; // Keep parallel to ground for distance calculation
+                robotDir.normalize();
+                
+                // Calculate target camera position: RobotPos - Direction * Dist + Up * Height
+                const targetPos = new THREE.Vector3().copy(robotMesh.position);
+                targetPos.sub(robotDir.multiplyScalar(offsetDist));
+                targetPos.y += offsetHeight;
+                
+                // Smoothly interpolate camera position (Damping)
+                // Using a smaller factor makes it smoother but "laggier"
+                const smoothFactor = 0.05;
+                camera.position.lerp(targetPos, smoothFactor);
+                
+                // Make camera look at robot with smoothing
+                const lookTarget = new THREE.Vector3().copy(robotMesh.position);
+                lookTarget.y += 0.5; // Look slightly above the center (at the "head")
+                
+                // We manually interpolate the controls target to avoid jitter
+                controls.target.lerp(lookTarget, smoothFactor);
+                
+                // Update controls is handled in animate(), but since we modify camera manually here,
+                // we should be careful. OrbitControls might fight with us if enabled.
+                // When in follow mode, maybe we should disable user rotation?
+                // But user might want to rotate AROUND the robot while following.
+                // If so, we shouldn't force camera position, but just move the TARGET.
+                // HOWEVER, user asked for "Follow Camera" which usually means fixed relative position.
+                // So forcing camera position is correct for TPS.
+                // To allow "looking around", we would need to add mouse delta to the offset vector.
+                
+                // For now, strict TPS follow:
+                // To prevent OrbitControls from overriding our position, we can just NOT call controls.update() 
+                // OR rely on the fact that we set position every frame.
+                // But controls.update() uses damping which might overwrite our position if we don't handle it carefully.
+                // Actually, if we set camera.position and controls.target, controls.update() will re-derive spherical coords.
+                // So it works.
+            }
+
+            if (cloudRegisteredCloud) {
+                // 关键修正：
+                // 1. 机器人的 quaternion 是 (x, z, -y, w)，这是把 ROS 的 body frame 转到了 Three.js world frame
+                // 2. 点云数据 geometry 是 ROS 坐标 (x, y, z)
+                // 3. 我们需要先让点云数据“站起来”（Z-up -> Y-up），再应用机器人的旋转
+                
+                // 使用手动配置的旋转修正
+                const qFix = new THREE.Quaternion();
+                const euler = new THREE.Euler(
+                    THREE.MathUtils.degToRad(manualRot.x), 
+                    THREE.MathUtils.degToRad(manualRot.y), 
+                    THREE.MathUtils.degToRad(manualRot.z), 
+                    'XYZ'
+                );
+                qFix.setFromEuler(euler);
+                
+                // 组合旋转：先应用修正，再应用机器人旋转
+                // Three.js quaternion multiplication order: parent * child
+                // 我们希望 final_rot = robot_rot * fix_rot
+                const qRobot = robotMesh.quaternion.clone();
+                cloudRegisteredCloud.quaternion.copy(qRobot.multiply(qFix));
+                
+                // 同时也跟随位置
+                cloudRegisteredCloud.position.copy(robotMesh.position);
+            }
         });
 
-        socket.on('cur_scan', async (data) => {
-            if (curScanCloud) {
-                scene.remove(curScanCloud);
-                curScanCloud = null;
-            }
-            if (!toggleScan.checked) return;
+        // socket.on('cur_scan', async (data) => {
+        //     // Disabled
+        // });
+
+        socket.on('cloud_registered', async (data) => {
             const positions = await toFloat32Async(data);
             if (!positions) return;
             const numPoints = positions.length / 3;
-            document.getElementById('cur-scan-count').textContent = numPoints;
-            const geometry = new THREE.BufferGeometry();
-            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            const material = new THREE.PointsMaterial({ color: 0xff0000, size: 0.08, sizeAttenuation: true });
-            curScanCloud = new THREE.Points(geometry, material);
-            curScanCloud.rotation.x = -Math.PI / 2;
-            curScanCloud.visible = toggleScan.checked;
-            scene.add(curScanCloud);
-            fitView(positions);
-        });
-
-        socket.on('cloud_registered', async (data) => {
-            const incoming = await toFloat32Async(data);
-            if (!incoming) return;
-            const aggregated = accumulateVoxel(incoming);
-            const numPoints = aggregated.length / 3;
             document.getElementById('cloud-registered-count').textContent = numPoints;
             if (!cloudRegisteredCloud) {
                 const geometry = new THREE.BufferGeometry();
-                geometry.setAttribute('position', new THREE.BufferAttribute(aggregated, 3));
+                geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
                 const material = new THREE.PointsMaterial({ color: 0x00ff00, size: 0.05, sizeAttenuation: true });
                 cloudRegisteredCloud = new THREE.Points(geometry, material);
+                // Fixed rotation for Z-up to Y-up conversion, assuming data is in Map frame
                 cloudRegisteredCloud.rotation.x = -Math.PI / 2;
                 cloudRegisteredCloud.visible = toggleRegistered.checked;
                 scene.add(cloudRegisteredCloud);
             } else {
-                cloudRegisteredCloud.geometry.setAttribute('position', new THREE.BufferAttribute(aggregated, 3));
+                cloudRegisteredCloud.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
                 cloudRegisteredCloud.geometry.attributes.position.needsUpdate = true;
                 cloudRegisteredCloud.visible = toggleRegistered.checked;
             }
-            if (toggleRegistered.checked) fitView(aggregated);
+            if (!freeView && toggleRegistered.checked && isFirstRegisteredCloud) {
+                fitView(positions);
+                isFirstRegisteredCloud = false;
+            }
         });
 
         // Handle Path
@@ -357,6 +800,58 @@
             scene.add(pathLine);
         });
 
+        // Handle Submap Boxes (OBB visualization)
+        socket.on('submap_boxes', (data) => {
+            if (!data) return;
+            const makeOrUpdateBox = (boxData, existingMesh, colorHex) => {
+                if (!boxData) return existingMesh;
+                const pos = boxData.position;
+                const ori = boxData.orientation;
+                const ext = boxData.extent;
+                if (!existingMesh) {
+                    const geometry = new THREE.BoxGeometry(ext.x, ext.z, ext.y); // Map ROS (x,y,z) to Three (x,z,y) lengths
+                    const material = new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.25, wireframe: false });
+                    existingMesh = new THREE.Mesh(geometry, material);
+                    scene.add(existingMesh);
+                } else {
+                    // If extents changed, update geometry
+                    const needResize = (
+                        existingMesh.geometry.parameters.width !== ext.x ||
+                        existingMesh.geometry.parameters.height !== ext.z ||
+                        existingMesh.geometry.parameters.depth !== ext.y
+                    );
+                    if (needResize) {
+                        existingMesh.geometry.dispose();
+                        existingMesh.geometry = new THREE.BoxGeometry(ext.x, ext.z, ext.y);
+                    }
+                }
+                existingMesh.position.set(pos.x, pos.z, -pos.y);
+                existingMesh.setRotationFromQuaternion(new THREE.Quaternion(ori.x, ori.z, -ori.y, ori.w));
+                return existingMesh;
+            };
+
+            mapBoxMesh = makeOrUpdateBox(data.map_box, mapBoxMesh, 0xFFA500);
+            scanBoxMesh = makeOrUpdateBox(data.scan_box, scanBoxMesh, 0x00FF00);
+            if (mapBoxMesh) mapBoxMesh.visible = toggleMapBox.checked;
+            if (scanBoxMesh) scanBoxMesh.visible = toggleScanBox.checked;
+        });
+
+        // Handle Target Point
+        socket.on('target_point', (data) => {
+            if (targetPointMesh) {
+                // Update position
+                // ROS (x, y, z) -> Three (x, z, -y)
+                targetPointMesh.position.set(data.x, data.z, -data.y);
+            } else {
+                // Create mesh
+                const geometry = new THREE.SphereGeometry(0.15, 16, 16);
+                const material = new THREE.MeshBasicMaterial({ color: 0xFF00FF }); // Magenta for target
+                targetPointMesh = new THREE.Mesh(geometry, material);
+                targetPointMesh.position.set(data.x, data.z, -data.y);
+                scene.add(targetPointMesh);
+            }
+        });
+
         // Animation loop
         function animate() {
             requestAnimationFrame(animate);
@@ -370,6 +865,171 @@
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
+
+        // Raycaster for picking points
+        const raycaster = new THREE.Raycaster();
+        raycaster.params.Points.threshold = 0.2; // Tolerance for clicking points
+        const mouse = new THREE.Vector2();
+        let isDraggingPose = false;
+        let dragStartPoint = null;
+        let tempArrowHelper = null;
+
+        const container = document.getElementById('container');
+
+        // Mouse down: start drag
+        container.addEventListener('mousedown', (event) => {
+            // Check for Ctrl + Click for Point Selection
+            if (event.ctrlKey) {
+                mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                raycaster.setFromCamera(mouse, camera);
+
+                const intersects = [];
+                if (globalPointsCloud && globalPointsCloud.visible) {
+                    intersects.push(...raycaster.intersectObject(globalPointsCloud));
+                }
+                if (cloudRegisteredCloud && cloudRegisteredCloud.visible) {
+                    intersects.push(...raycaster.intersectObject(cloudRegisteredCloud));
+                }
+
+                if (intersects.length > 0) {
+                    intersects.sort((a, b) => a.distance - b.distance);
+                    
+                    let rosX, rosY, rosZ;
+                    if (intersects[0].index !== undefined) {
+                         const attr = intersects[0].object.geometry.attributes.position;
+                         rosX = attr.getX(intersects[0].index);
+                         rosY = attr.getY(intersects[0].index);
+                         rosZ = attr.getZ(intersects[0].index);
+                    } else {
+                        return;
+                    }
+
+                    document.getElementById('click-x').value = rosX.toFixed(3);
+                    document.getElementById('click-y').value = rosY.toFixed(3);
+                    document.getElementById('click-z').value = rosZ.toFixed(3);
+                    return;
+                }
+            }
+
+            // Only trigger on Shift+Click (or some modifier) to avoid conflict with OrbitControls?
+            // Or better: use a specific mouse button (e.g., Right Click)?
+            // But OrbitControls usually uses Right Click for Pan.
+            // Let's use Shift + Left Click for "Pose Set" drag.
+            if (!event.shiftKey) return;
+
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+
+            const intersects = [];
+            if (globalPointsCloud && globalPointsCloud.visible) {
+                intersects.push(...raycaster.intersectObject(globalPointsCloud));
+            }
+            if (cloudRegisteredCloud && cloudRegisteredCloud.visible) {
+                intersects.push(...raycaster.intersectObject(cloudRegisteredCloud));
+            }
+
+            if (intersects.length > 0) {
+                intersects.sort((a, b) => a.distance - b.distance);
+                
+                // Get ROS coordinates from geometry index for accuracy
+                let rosX, rosY, rosZ;
+                if (intersects[0].index !== undefined) {
+                     const attr = intersects[0].object.geometry.attributes.position;
+                     rosX = attr.getX(intersects[0].index);
+                     rosY = attr.getY(intersects[0].index);
+                     rosZ = attr.getZ(intersects[0].index);
+                } else {
+                    return;
+                }
+
+                // Start dragging
+                isDraggingPose = true;
+                dragStartPoint = intersects[0].point.clone(); // ThreeJS world coordinates
+                
+                // Fill Position immediately
+                document.getElementById('init-x').value = rosX.toFixed(3);
+                document.getElementById('init-y').value = rosY.toFixed(3);
+                document.getElementById('init-z').value = rosZ.toFixed(3);
+                
+                // Disable OrbitControls while dragging
+                controls.enabled = false;
+
+                // Visual feedback start
+                if (tempArrowHelper) scene.remove(tempArrowHelper);
+                tempArrowHelper = new THREE.ArrowHelper(
+                    new THREE.Vector3(1, 0, 0), 
+                    dragStartPoint, 
+                    1.0, 
+                    0xffff00
+                );
+                scene.add(tempArrowHelper);
+            }
+        });
+
+        // Mouse move: update direction
+        container.addEventListener('mousemove', (event) => {
+            if (!isDraggingPose || !dragStartPoint) return;
+
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+
+            // We need to find where the mouse is pointing on the "ground plane" defined by start point height
+            // Create a temporary plane at dragStartPoint height
+            const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -dragStartPoint.y);
+            const target = new THREE.Vector3();
+            raycaster.ray.intersectPlane(plane, target);
+            
+            if (target) {
+                const dir = new THREE.Vector3().subVectors(target, dragStartPoint);
+                const len = dir.length();
+                if (len > 0.1) {
+                    dir.normalize();
+                    tempArrowHelper.setDirection(dir);
+                    tempArrowHelper.setLength(len);
+
+                    // Calculate Yaw in ROS frame
+                    // ThreeJS World: X=Right, Z=Front (or whatever), Y=Up
+                    // ROS: X=Front, Y=Left, Z=Up
+                    // Our conversion logic was: ROS(x,y,z) -> Three(x, z, -y)
+                    // So Three(x, y, z) -> ROS(x, -z, y)
+                    
+                    // But wait, global points are rotated by -90 deg X.
+                    // Local(x,y,z) -> World(x, z, -y)
+                    // So World(wx, wy, wz) -> Local(wx, -wz, wy)
+                    
+                    // Drag Vector in World: (dx, dy, dz) (dy is 0 on plane)
+                    // Corresponding Vector in ROS Local: (dx, -dz, 0)
+                    // Yaw is angle of (dx, -dz) in ROS XY plane.
+                    // ROS Yaw = atan2(ros_y, ros_x) = atan2(-dz, dx)
+                    
+                    const rosDx = dir.x;
+                    const rosDy = -dir.z; // Because ROS Y is Three -Z
+                    
+                    const yawRad = Math.atan2(rosDy, rosDx);
+                    const yawDeg = THREE.MathUtils.radToDeg(yawRad);
+                    
+                    document.getElementById('init-yaw').value = yawDeg.toFixed(1);
+                }
+            }
+        });
+
+        // Mouse up: finish drag
+        container.addEventListener('mouseup', () => {
+            if (isDraggingPose) {
+                isDraggingPose = false;
+                controls.enabled = true; // Re-enable OrbitControls
+                if (tempArrowHelper) {
+                    scene.remove(tempArrowHelper);
+                    tempArrowHelper = null;
+                }
+            }
+        });
+
+        // Keep double-click for simple position picking (optional, or remove if confusing)
+        // document.getElementById('container').addEventListener('dblclick', ...);
 
         animate();
     </script>
