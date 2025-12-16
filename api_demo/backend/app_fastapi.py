@@ -12,6 +12,7 @@ from sensor_msgs.msg import PointCloud2
 from nav_msgs.msg import Odometry, Path
 from geometry_msgs.msg import PoseWithCovarianceStamped, PointStamped, Point
 from std_msgs.msg import Bool, String
+from visualization_msgs.msg import Marker
 from tf.transformations import quaternion_matrix, quaternion_multiply
 
 # --- ROS Configuration ---
@@ -27,7 +28,8 @@ latest_data = {
     "target_point": None, # New: Real-time lookahead target
     "baselink2map": None,
     "odom2map": None,
-    "submap_boxes": None
+    "submap_boxes": None,
+    "map_to_odom": None
 }
 
 import numpy as np
@@ -88,6 +90,19 @@ def cloud_registered_callback(msg):
         points_np = points_np[::points_np.shape[0] // 20000]
 
     latest_data["cloud_registered"] = points_np.tobytes()
+
+def occupancy_inflate_callback(msg):
+    points_gen = pc2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True)
+    points_np = np.array(list(points_gen), dtype=np.float32)
+    if points_np.shape[0] > 100000:
+        points_np = points_np[::points_np.shape[0] // 100000]
+    latest_data["occupancy_inflate"] = points_np.tobytes()
+
+def local_traj_callback(msg: Marker):
+    pts = []
+    for p in msg.points:
+        pts.append({"x": p.x, "y": p.y, "z": p.z})
+    latest_data["local_traj"] = {"points": pts}
 
 def path_callback(msg):
     poses = []
@@ -209,14 +224,24 @@ def odom2map_callback(msg):
     latest_data["odom2map"] = {"position": position, "orientation": orientation}
     update_submap_boxes()
 
+def map_to_odom_callback(msg):
+    pose = msg.pose.pose
+    position = {"x": pose.position.x, "y": pose.position.y, "z": pose.position.z}
+    orientation = {"x": pose.orientation.x, "y": pose.orientation.y, "z": pose.orientation.z, "w": pose.orientation.w}
+    latest_data["map_to_odom"] = {"position": position, "orientation": orientation}
+
 def ros_thread_entry():
     rospy.init_node('fastapi_visualizer', anonymous=True, disable_signals=True)
     rospy.Subscriber('/map', PointCloud2, global_points_callback)
     rospy.Subscriber('/localization', Odometry, localization_callback)
     rospy.Subscriber('/baselink2map', Odometry, baselink2map_callback)
     rospy.Subscriber('/odom2map', Odometry, odom2map_callback)
+    rospy.Subscriber('/map_to_odom', Odometry, map_to_odom_callback)
     # rospy.Subscriber('/cloud_registered_body', PointCloud2, cur_scan_callback) # Disabled
     rospy.Subscriber('/cloud_registered', PointCloud2, cloud_registered_callback)
+    rospy.Subscriber('/sdf_map/occupancy_inflate', PointCloud2, occupancy_inflate_callback)
+    rospy.Subscriber('/sdf_map/occupancy', PointCloud2, occupancy_inflate_callback)
+    rospy.Subscriber('/planning_vis/trajectory', Marker, local_traj_callback)
     rospy.Subscriber('/pct_path', Path, path_callback)
     rospy.Subscriber('/arrival_status', String, arrival_status_callback)
     rospy.Subscriber('/target_point', Point, target_point_callback) # Subscribe to target point
@@ -282,6 +307,12 @@ async def connect(sid, environ):
         await sio.emit('target_point', latest_data["target_point"], room=sid)
     if latest_data.get("submap_boxes"):
         await sio.emit('submap_boxes', latest_data["submap_boxes"], room=sid)
+    if latest_data.get("map_to_odom"):
+        await sio.emit('map_to_odom', latest_data["map_to_odom"], room=sid)
+    if latest_data.get("occupancy_inflate"):
+        await sio.emit('occupancy_inflate', latest_data["occupancy_inflate"], room=sid)
+    if latest_data.get("local_traj"):
+        await sio.emit('local_traj', latest_data["local_traj"], room=sid)
 
 @sio.event
 async def disconnect(sid):
@@ -311,6 +342,12 @@ async def broadcast_loop():
                     await sio.emit('target_point', latest_data["target_point"], room=sid)
                 if latest_data.get("submap_boxes"):
                     await sio.emit('submap_boxes', latest_data["submap_boxes"], room=sid)
+                if latest_data.get("map_to_odom"):
+                    await sio.emit('map_to_odom', latest_data["map_to_odom"], room=sid)
+                if latest_data.get("occupancy_inflate"):
+                    await sio.emit('occupancy_inflate', latest_data["occupancy_inflate"], room=sid)
+                if latest_data.get("local_traj"):
+                    await sio.emit('local_traj', latest_data["local_traj"], room=sid)
 
                 # Restore global points broadcast but with a check to avoid spamming
                 # Frontend will ignore if it already has data

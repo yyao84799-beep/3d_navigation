@@ -153,6 +153,22 @@
 
             <div class="status-item">
                 <label>
+                    <input type="checkbox" id="toggle-occ" checked>
+                    <span class="status-label">Occupancy Inflate</span>
+                </label>
+                <span id="occupancy-inflate-count" class="status-value">0</span>
+            </div>
+
+            <div class="status-item">
+                <label>
+                    <input type="checkbox" id="toggle-local-traj" checked>
+                    <span class="status-label">Local Trajectory</span>
+                </label>
+                <span id="local-traj-count" class="status-value">0</span>
+            </div>
+
+            <div class="status-item">
+                <label>
                     <input type="checkbox" id="toggle-map-box" checked>
                     <span class="status-label">Map Submap Box</span>
                 </label>
@@ -309,11 +325,14 @@
         let globalPointsCloud = null;
         let curScanCloud = null;
         let cloudRegisteredCloud = null;
+        let occupancyInflateCloud = null;
         let robotMesh = null;
         let pathLine = null;
+        let localTrajLine = null;
         let targetPointMesh = null; // New: Target point visualization
         let mapBoxMesh = null;
         let scanBoxMesh = null;
+        let mapToOdom = null;
 
         let isFirstGlobalPoints = true;
         let isFirstCurScan = true;
@@ -330,6 +349,8 @@
         const toggleMapBox = document.getElementById('toggle-map-box');
         const toggleScanBox = document.getElementById('toggle-scan-box');
         const togglePath = document.getElementById('toggle-path');
+        const toggleOcc = document.getElementById('toggle-occ');
+        const toggleLocalTraj = document.getElementById('toggle-local-traj');
         const toggleFreeView = document.getElementById('toggle-free-view');
         const recvGlobal = document.getElementById('recv-global');
         // const recvScan = document.getElementById('recv-scan'); // Removed
@@ -482,6 +503,12 @@
         toggleRegistered.addEventListener('change', (e) => {
             if (cloudRegisteredCloud) cloudRegisteredCloud.visible = e.target.checked;
         });
+        toggleOcc.addEventListener('change', (e) => {
+            if (occupancyInflateCloud) occupancyInflateCloud.visible = e.target.checked;
+        });
+        toggleLocalTraj.addEventListener('change', (e) => {
+            if (localTrajLine) localTrajLine.visible = e.target.checked;
+        });
         toggleMapBox.addEventListener('change', (e) => {
             if (mapBoxMesh) mapBoxMesh.visible = e.target.checked;
         });
@@ -607,6 +634,19 @@
             console.log('Disconnected from server');
         });
 
+        socket.on('map_to_odom', (data) => {
+            if (!data || !data.position || !data.orientation) return;
+            const pos = data.position;
+            const ori = data.orientation;
+            const qx = ori.x, qy = ori.y, qz = ori.z, qw = ori.w;
+            const R = [
+                1 - 2*(qy*qy + qz*qz), 2*(qx*qy - qw*qz), 2*(qx*qz + qw*qy),
+                2*(qx*qy + qw*qz), 1 - 2*(qx*qx + qz*qz), 2*(qy*qz - qw*qx),
+                2*(qx*qz - qw*qy), 2*(qy*qz + qw*qx), 1 - 2*(qx*qx + qy*qy)
+            ];
+            mapToOdom = { R, t: [pos.x, pos.y, pos.z] };
+        });
+
         socket.on('global_points', async (data) => {
             // Always update if data is received
             
@@ -724,31 +764,7 @@
                 // So it works.
             }
 
-            if (cloudRegisteredCloud) {
-                // 关键修正：
-                // 1. 机器人的 quaternion 是 (x, z, -y, w)，这是把 ROS 的 body frame 转到了 Three.js world frame
-                // 2. 点云数据 geometry 是 ROS 坐标 (x, y, z)
-                // 3. 我们需要先让点云数据“站起来”（Z-up -> Y-up），再应用机器人的旋转
-                
-                // 使用手动配置的旋转修正
-                const qFix = new THREE.Quaternion();
-                const euler = new THREE.Euler(
-                    THREE.MathUtils.degToRad(manualRot.x), 
-                    THREE.MathUtils.degToRad(manualRot.y), 
-                    THREE.MathUtils.degToRad(manualRot.z), 
-                    'XYZ'
-                );
-                qFix.setFromEuler(euler);
-                
-                // 组合旋转：先应用修正，再应用机器人旋转
-                // Three.js quaternion multiplication order: parent * child
-                // 我们希望 final_rot = robot_rot * fix_rot
-                const qRobot = robotMesh.quaternion.clone();
-                cloudRegisteredCloud.quaternion.copy(qRobot.multiply(qFix));
-                
-                // 同时也跟随位置
-                cloudRegisteredCloud.position.copy(robotMesh.position);
-            }
+            
         });
 
         // socket.on('cur_scan', async (data) => {
@@ -758,11 +774,24 @@
         socket.on('cloud_registered', async (data) => {
             const positions = await toFloat32Async(data);
             if (!positions) return;
+            let posOut = positions;
+            if (mapToOdom && mapToOdom.R && mapToOdom.t) {
+                const R = mapToOdom.R; const t = mapToOdom.t;
+                const n = positions.length / 3;
+                const out = new Float32Array(positions.length);
+                for (let i = 0; i < n; i++) {
+                    const x = positions[i*3], y = positions[i*3+1], z = positions[i*3+2];
+                    out[i*3]   = R[0]*x + R[1]*y + R[2]*z + t[0];
+                    out[i*3+1] = R[3]*x + R[4]*y + R[5]*z + t[1];
+                    out[i*3+2] = R[6]*x + R[7]*y + R[8]*z + t[2];
+                }
+                posOut = out;
+            }
             const numPoints = positions.length / 3;
             document.getElementById('cloud-registered-count').textContent = numPoints;
             if (!cloudRegisteredCloud) {
                 const geometry = new THREE.BufferGeometry();
-                geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                geometry.setAttribute('position', new THREE.BufferAttribute(posOut, 3));
                 const material = new THREE.PointsMaterial({ color: 0x00ff00, size: 0.05, sizeAttenuation: true });
                 cloudRegisteredCloud = new THREE.Points(geometry, material);
                 // Fixed rotation for Z-up to Y-up conversion, assuming data is in Map frame
@@ -770,14 +799,52 @@
                 cloudRegisteredCloud.visible = toggleRegistered.checked;
                 scene.add(cloudRegisteredCloud);
             } else {
-                cloudRegisteredCloud.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                cloudRegisteredCloud.geometry.setAttribute('position', new THREE.BufferAttribute(posOut, 3));
                 cloudRegisteredCloud.geometry.attributes.position.needsUpdate = true;
                 cloudRegisteredCloud.visible = toggleRegistered.checked;
             }
             if (!freeView && toggleRegistered.checked && isFirstRegisteredCloud) {
-                fitView(positions);
+                fitView(posOut);
                 isFirstRegisteredCloud = false;
             }
+        });
+
+        socket.on('occupancy_inflate', async (data) => {
+            const positions = await toFloat32Async(data);
+            if (!positions) return;
+            const numPointsOcc = positions.length / 3;
+            const occCountEl = document.getElementById('occupancy-inflate-count');
+            if (occCountEl) occCountEl.textContent = numPointsOcc;
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            const material = new THREE.PointsMaterial({ color: 0xff4444, size: 0.05, sizeAttenuation: true });
+            if (!occupancyInflateCloud) {
+                occupancyInflateCloud = new THREE.Points(geometry, material);
+                occupancyInflateCloud.rotation.x = -Math.PI / 2;
+                occupancyInflateCloud.visible = toggleOcc ? toggleOcc.checked : true;
+                scene.add(occupancyInflateCloud);
+            } else {
+                occupancyInflateCloud.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                occupancyInflateCloud.geometry.attributes.position.needsUpdate = true;
+                occupancyInflateCloud.visible = toggleOcc ? toggleOcc.checked : true;
+            }
+        });
+
+        socket.on('local_traj', (data) => {
+            if (!data || !data.points) return;
+            const trajCountEl = document.getElementById('local-traj-count');
+            if (trajCountEl) trajCountEl.textContent = data.points.length;
+            if (localTrajLine) scene.remove(localTrajLine);
+            const points = [];
+            for (let i = 0; i < data.points.length; i++) {
+                const p = data.points[i];
+                points.push(new THREE.Vector3(p.x, p.z, -p.y));
+            }
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            const material = new THREE.LineBasicMaterial({ color: 0xff00ff, linewidth: 2 });
+            localTrajLine = new THREE.Line(geometry, material);
+            localTrajLine.visible = toggleLocalTraj ? toggleLocalTraj.checked : true;
+            scene.add(localTrajLine);
         });
 
         // Handle Path

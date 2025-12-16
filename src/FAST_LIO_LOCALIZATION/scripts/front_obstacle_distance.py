@@ -28,9 +28,9 @@ class Livox3DFrontDetector:
         if points_np.size == 0:
             return
 
-        X_MIN, X_MAX = 0.3, 2.0     # 前方 0.1 - 2m
+        X_MIN, X_MAX = 0.29, 2.0     # 前方 0.1 - 2m
         Y_MIN, Y_MAX = -0.1, 0.1    # 左右 ±0.3m
-        Z_MIN, Z_MAX = -0.3, 0.3    # 高度范围
+        Z_MIN, Z_MAX = -0.2, 0.3    # 高度范围
 
         x = points_np[:, 0]
         y = points_np[:, 1]

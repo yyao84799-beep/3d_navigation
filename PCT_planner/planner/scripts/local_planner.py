@@ -26,10 +26,11 @@ class LocalPlanner:
         self.lookahead_distance = 0.9 # Reduced from 1.0 to 0.5 to reduce corner cutting
         self.max_speed = rospy.get_param("~max_speed", 1.5)
         self.max_walk_speed = rospy.get_param("~max_walk_speed", 0.6)
-        self.kp_angular = rospy.get_param("~kp_angular", 0.5) # Increased from 0.4 to 0.8 for faster turning response
+        self.kp_angular = rospy.get_param("~kp_angular", 0.45) # Increased from 0.4 to 0.8 for faster turning response
         self.last_speed = 0.0
         self.MAX_ACCEL = 0.3
         self.k_dist = rospy.get_param("~k_dist", 0.8)
+        
         self.v_bias = rospy.get_param("~v_bias", 0.3)
         self.MAX_ACCEL_CLIMB = rospy.get_param("~max_accel_climb", 0.6)
         self.min_stair_speed = rospy.get_param("~min_stair_speed", 1.5)
@@ -47,9 +48,17 @@ class LocalPlanner:
         self.last_enable_ts = 0.0
         self.last_enable_pos = None
         self.close_hold_start_idx = None
+        self.front_distance = float("inf")
+        self.obstacle_slow_start = rospy.get_param("~obstacle_slow_start", 1.5)
+        self.obstacle_stop_dist = rospy.get_param("~obstacle_stop_dist", 0.5)
+        self.up_obstacle_slow_start = rospy.get_param("~up_obstacle_slow_start", 0.75)
+        self.flat_z_threshold = rospy.get_param("~flat_z_threshold", 0.05)
         self.stair_mode_enabled = False
         self.ws_open = False
         self.is_moving = True  # Default to allowing movement, can be controlled via topic
+        
+        # 发布控制指令
+        self.cmd_vel_pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
         
         # 订阅全局路径和机器人位姿
         self.current_path = None
@@ -57,11 +66,9 @@ class LocalPlanner:
         rospy.Subscriber("/pct_path", Path, self.path_callback)
         rospy.Subscriber("/localization", Odometry, self.odom_callback)
         rospy.Subscriber("/motion_control", Bool, self.motion_control_callback) # Topic to control start/stop
+        rospy.Subscriber("/front_distance", String, self.front_distance_callback)
         self.target_pub = rospy.Publisher("/target_point", Point, queue_size=1)
         self.arrival_pub = rospy.Publisher("/arrival_status", String, queue_size=1) # Publisher for arrival status
-
-        # 发布控制指令
-        self.cmd_vel_pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
         if self.enable_stair_ws:
             self.ws_app = websocket.WebSocketApp(self.ws_server_uri, on_open=self.on_open, on_close=self.on_close)
             threading.Thread(target=self.ws_app.run_forever, daemon=True).start()
@@ -106,6 +113,16 @@ class LocalPlanner:
             rospy.loginfo("Motion stopped by user command.")
         else:
             rospy.loginfo("Motion started by user command.")
+
+    def front_distance_callback(self, msg):
+        data = msg.data.strip()
+        if data.lower() == "inf":
+            self.front_distance = float("inf")
+            return
+        try:
+            self.front_distance = float(data)
+        except ValueError:
+            self.front_distance = float("inf")
 
     def send_request(self, title, data=None):
         if data is None:
@@ -280,6 +297,7 @@ class LocalPlanner:
                     rate.sleep()
                     continue
 
+            delta_total, n_points = self.compute_z_delta_ahead(closest_idx)
             if target is not None:
                 point_msg = Point(x=target[0], y=target[1], z=target[2])
                 self.target_pub.publish(point_msg)
@@ -289,7 +307,6 @@ class LocalPlanner:
                 if self.enable_stair_ws:
                     desired = self.stair_mode_enabled
                     now_ts = time.time()
-                    delta_total, n_points = self.compute_z_delta_ahead(closest_idx)
                     rospy.loginfo(
                         f"stair judge: n={n_points}, z_delta={delta_total:.3f}, enabled={self.stair_mode_enabled}, desired={desired}, "
                         f"dz_on={self.dz_on:.3f}, dz_off={self.dz_off:.3f}, debounce_dt={now_ts - self.last_mode_change_ts:.2f}, hold_dt={now_ts - self.last_enable_ts:.2f}, window={self.z_window_distance:.2f}m"
@@ -343,13 +360,40 @@ class LocalPlanner:
                 rate.sleep()
                 continue
 
-            # 计算控制指令
             angular_speed, linear_speed= self.calculate_velocity(target)
                         
-            # 接近终点时减速
             if closest_idx >= len(self.current_path)-3:
                 linear_speed *= 0.3
                 
+            obstacle_d = self.front_distance
+            if obstacle_d < self.obstacle_slow_start:
+                if abs(delta_total) < self.flat_z_threshold:
+                    motion_profile = "flat"
+                    slow_start = self.obstacle_slow_start
+                    stop_dist = self.obstacle_stop_dist
+                elif delta_total > 0.0:
+                    motion_profile = "up"
+                    slow_start = self.up_obstacle_slow_start
+                    stop_dist = 0.0
+                else:
+                    motion_profile = "down"
+                    slow_start = self.obstacle_slow_start
+                    stop_dist = self.obstacle_stop_dist
+                if obstacle_d <= stop_dist:
+                    ratio = 0.0
+                else:
+                    denom = slow_start - stop_dist
+                    if denom <= 0.0:
+                        ratio = 0.0
+                    else:
+                        ratio = (obstacle_d - stop_dist) / denom
+                        ratio = max(0.0, min(1.0, ratio))
+                if motion_profile == "down":
+                    target_end = -0.25
+                    linear_speed = target_end + (linear_speed - target_end) * ratio
+                else:
+                    linear_speed = linear_speed * ratio
+
             delta_speed = linear_speed - self.last_speed
             accel_limit = self.MAX_ACCEL
             if getattr(self, "stair_mode_enabled", False):
