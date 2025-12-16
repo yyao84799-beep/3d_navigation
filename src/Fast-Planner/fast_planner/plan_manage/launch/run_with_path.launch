@@ -1,0 +1,85 @@
+<launch>
+  <!-- ================= 参数配置 ================= -->
+  <!-- 您的里程计话题 -->
+  <arg name="odom_topic" default="/localization"/>
+  <!-- 您的实时点云话题 (不要使用全局地图，使用局部实时点云) -->
+  <arg name="cloud_topic" default="/cloud_registered_odom"/>
+  <!-- 您的全局路径话题 -->
+  <arg name="path_topic" default="/pct_path"/>
+  <!-- 地图坐标系，通常是 world 或 map -->
+  <arg name="frame_id" default="map"/>
+  
+  <!-- 地图大小 -->
+  
+  <arg name="map_size_x" value="40.0"/>
+  <arg name="map_size_y" value="40.0"/>
+  <arg name="map_size_z" value=" 5.0"/>
+
+  <!-- ================= Fast Planner 核心 ================= -->
+  <include file="$(find plan_manage)/launch/kino_algorithm.xml">
+    <arg name="map_size_x_" value="$(arg map_size_x)"/>
+    <arg name="map_size_y_" value="$(arg map_size_y)"/>
+    <arg name="map_size_z_" value="$(arg map_size_z)"/>
+    <arg name="odometry_topic" value="$(arg odom_topic)"/>
+    <arg name="frame_id" value="$(arg frame_id)"/>
+    
+    <!-- 传感器输入 -->
+    <arg name="cloud_topic" value="$(arg cloud_topic)"/>
+    
+    <!-- 即使不使用深度图，也需要定义这些以防报错 -->
+    <arg name="camera_pose_topic" value="/dummy/pose"/>
+    <arg name="depth_topic" value="/dummy/depth"/>
+    <arg name="cx" value="321.0"/>
+    <arg name="cy" value="243.0"/>
+    <arg name="fx" value="387.0"/>
+    <arg name="fy" value="387.0"/>
+    
+    <!-- 动力学参数 -->
+    <arg name="max_vel" value="0.5" />
+    <arg name="max_acc" value="0.5" />
+    
+    <!-- 1: 手动目标模式 (通过 path_follower 发送) -->
+    <arg name="flight_type" value="1" /> 
+    
+    <!-- 占位参数 -->
+    <arg name="point_num" value="0" />
+    <arg name="point0_x" value="0" /> <arg name="point0_y" value="0" /> <arg name="point0_z" value="0" />
+    <arg name="point1_x" value="0" /> <arg name="point1_y" value="0" /> <arg name="point1_z" value="0" />
+    <arg name="point2_x" value="0" /> <arg name="point2_y" value="0" /> <arg name="point2_z" value="0" />
+  </include>
+
+  <!-- ================= 轨迹服务器 (执行控制) ================= -->
+  <node pkg="plan_manage" name="traj_server" type="traj_server" output="screen">
+    <remap from="/position_cmd" to="planning/pos_cmd"/>
+    <remap from="/odom_world" to="$(arg odom_topic)"/>
+    <param name="traj_server/time_forward" value="1.5" type="double"/>
+    <param name="frame_id" value="$(arg frame_id)"/>
+  </node>
+
+  <!-- ================= 路径跟随器脚本 ================= -->
+  <node pkg="plan_manage" name="path_follower" type="path_follower.py" output="screen">
+    <remap from="/path" to="$(arg path_topic)"/>
+    <remap from="/odom" to="$(arg odom_topic)"/>
+    <param name="lookahead_dist" value="1"/> <!-- 前瞻距离，可调整 -->
+  </node>
+
+  <!-- ================= 轨迹转cmd_vel (差速控制) ================= -->
+  <node pkg="plan_manage" name="traj_to_cmdvel" type="traj_to_cmdvel.py" output="screen">
+    <remap from="/planning/pos_cmd" to="planning/pos_cmd"/>
+    <remap from="/cmd_vel" to="/cmd_vel"/>
+    <remap from="/odom" to="$(arg odom_topic)"/>
+    <param name="k_p" value="1.5"/>
+    <param name="k_w" value="2.0"/>
+    <param name="max_v" value="0.5"/>
+    <param name="max_w" value="0.5"/>
+  </node>
+
+  <!-- ================= 点云坐标变换（map->odom） ================= -->
+  <node pkg="plan_manage" name="cloud_tf_relay" type="cloud_tf_relay.py" output="screen">
+    <param name="input_cloud_topic" value="/cloud_registered"/>
+    <param name="transform_topic" value="/map_to_odom"/>
+    <param name="output_cloud_topic" value="/cloud_registered_odom"/>
+    <param name="target_frame" value="odom"/>
+  </node>
+
+</launch>
