@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import sys
 import argparse
 import numpy as np
@@ -15,7 +16,7 @@ from nav_msgs.msg import Odometry
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--scene', type=str, default='Spiral', help='Name of the scene. Available: [\'Spiral\', \'Building\', \'Plaza\', \'Room\']')
-args = parser.parse_args()
+args, _ = parser.parse_known_args(rospy.myargv(argv=sys.argv)[1:])
 def goal_callback(msg):
     """接收目标点的回调函数"""
     global end_pos, end_height  # 声明修改全局变量
@@ -272,4 +273,3 @@ if __name__ == '__main__':
     rospy.Subscriber("/clicked_point", PointStamped, goal_callback)
 
     rospy.spin()
-

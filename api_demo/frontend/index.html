@@ -21,6 +21,35 @@
             transition: transform 0.3s ease;
             max-height: 90vh;
             overflow-y: auto;
+            z-index: 1000;
+        }
+        #video-container {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 320px;
+            height: 240px;
+            background: #000;
+            border-radius: 8px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            overflow: hidden;
+            z-index: 1000;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+        }
+        #video-container img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        #video-title {
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            background: rgba(0,0,0,0.6);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
         }
         #info h3 {
             margin: 0 0 15px 0;
@@ -130,6 +159,21 @@
         </div>
 
         <div class="status-group">
+            <div class="status-group-title">模式</div>
+            <div class="status-item">
+                <span class="status-label">当前</span>
+                <span id="mode-status" class="status-value">导航</span>
+            </div>
+            <div class="control-row" style="margin-top:8px; justify-content: space-between;">
+                <button id="btn-start-mapping" style="width:48%; background-color:#FF9800;">启动建图</button>
+                <button id="btn-start-navigation" style="width:48%; background-color:#4CAF50;">启动导航</button>
+            </div>
+            <div class="control-row" style="margin-top:8px; justify-content: flex-end;">
+                <button id="btn-stop-mode" style="width:100%; background-color:#666;">停止当前模式</button>
+            </div>
+        </div>
+
+        <div class="status-group">
             <div class="status-group-title">Data Layers</div>
             
             <div class="status-item">
@@ -205,7 +249,7 @@
             </div>
         </div>
 
-        <div class="status-group">
+        <div class="status-group" id="group-initial-pose">
             <div class="status-group-title">Initial Pose</div>
             <div style="font-size:0.85em; color:#888; margin-bottom:8px; line-height:1.4">
                 Shift + Drag on map to set pose & direction.
@@ -223,7 +267,7 @@
             </div>
         </div>
 
-        <div class="status-group">
+        <div class="status-group" id="group-clicked-point">
             <div class="status-group-title">Clicked Point</div>
             <div style="font-size:0.85em; color:#888; margin-bottom:8px; line-height:1.4">
                 Ctrl + Click on map to select point.
@@ -246,7 +290,7 @@
             </div>
         </div>
 
-        <div class="status-group">
+        <div class="status-group" id="group-mission-control">
             <div class="status-group-title">Mission Control</div>
             <div class="status-item">
                 <span class="status-label">Status</span>
@@ -280,6 +324,13 @@
             <input type="checkbox" id="scan-follow">
         </div>
     </div>
+    
+    <!-- Real-time Video Stream -->
+    <div id="video-container">
+        <div id="video-title">PPE Detection Stream</div>
+        <img src="/video_feed" alt="Video Feed Loading..." onerror="this.style.display='none'; document.getElementById('video-title').textContent='Stream Offline'">
+    </div>
+
     <div id="container"></div>
 
     <script type="module">
@@ -410,6 +461,131 @@
         const btnStartMotion = document.getElementById('btn-start-motion');
         const btnStopMotion = document.getElementById('btn-stop-motion');
         const missionStatusEl = document.getElementById('mission-status');
+        const modeStatusEl = document.getElementById('mode-status');
+        const btnStartMapping = document.getElementById('btn-start-mapping');
+        const btnStartNavigation = document.getElementById('btn-start-navigation');
+        const btnStopMode = document.getElementById('btn-stop-mode');
+        const groupInitialPose = document.getElementById('group-initial-pose');
+        const groupClickedPoint = document.getElementById('group-clicked-point');
+        const groupMissionControl = document.getElementById('group-mission-control');
+
+        let uiMode = 'navigation';
+        let serverMode = 'idle';
+        let lastAppliedServerMode = null;
+
+        function applyModeUI(mode) {
+            const nextServerMode = (mode || '').toLowerCase();
+            const enteringMapping = nextServerMode === 'mapping' && lastAppliedServerMode !== 'mapping';
+            serverMode = nextServerMode;
+            uiMode = serverMode === 'mapping' ? 'mapping' : 'navigation';
+            if (modeStatusEl) {
+                modeStatusEl.textContent = serverMode === 'mapping' ? '建图' : (serverMode === 'navigation' ? '导航' : '空闲');
+            }
+            if (btnStartMapping) btnStartMapping.textContent = serverMode === 'mapping' ? '建图中' : '启动建图';
+            if (btnStartNavigation) btnStartNavigation.textContent = serverMode === 'navigation' ? '导航中' : '启动导航';
+            if (btnStopMode) btnStopMode.disabled = serverMode === 'idle';
+            lastAppliedServerMode = serverMode;
+
+            const navOnly = uiMode === 'navigation';
+            if (groupInitialPose) groupInitialPose.style.display = navOnly ? '' : 'none';
+            if (groupClickedPoint) groupClickedPoint.style.display = navOnly ? '' : 'none';
+            if (groupMissionControl) groupMissionControl.style.display = navOnly ? '' : 'none';
+
+            if (uiMode === 'mapping') {
+                if (enteringMapping) {
+                    resetMappingAccum();
+                    if (cloudRegisteredCloud) {
+                        scene.remove(cloudRegisteredCloud);
+                        cloudRegisteredCloud.geometry.dispose();
+                        cloudRegisteredCloud.material.dispose();
+                        cloudRegisteredCloud = null;
+                    }
+                    const regCountEl = document.getElementById('cloud-registered-count');
+                    if (regCountEl) regCountEl.textContent = '0';
+                }
+                if (toggleGlobal) toggleGlobal.checked = false;
+                if (togglePath) togglePath.checked = false;
+                if (toggleLoc) toggleLoc.checked = false;
+                if (toggleOcc) toggleOcc.checked = false;
+                if (toggleLocalTraj) toggleLocalTraj.checked = false;
+                if (toggleRegistered) toggleRegistered.checked = true;
+                if (globalPointsCloud) globalPointsCloud.visible = false;
+                if (pathLine) pathLine.visible = false;
+                if (robotMesh) robotMesh.visible = false;
+                if (occupancyInflateCloud) occupancyInflateCloud.visible = false;
+                if (localTrajLine) localTrajLine.visible = false;
+                if (cloudRegisteredCloud) cloudRegisteredCloud.visible = true;
+                if (targetPointMesh) targetPointMesh.visible = false;
+                setReceive('global_points', false);
+                setReceive('path', false);
+                setReceive('localization', false);
+                setReceive('cloud_registered', true);
+            } else {
+                if (toggleGlobal) toggleGlobal.checked = true;
+                if (togglePath) togglePath.checked = true;
+                if (toggleLoc) toggleLoc.checked = true;
+                if (toggleOcc) toggleOcc.checked = true;
+                if (toggleLocalTraj) toggleLocalTraj.checked = true;
+                if (toggleRegistered) toggleRegistered.checked = true;
+                if (globalPointsCloud) globalPointsCloud.visible = true;
+                if (pathLine) pathLine.visible = true;
+                if (robotMesh) robotMesh.visible = true;
+                if (occupancyInflateCloud) occupancyInflateCloud.visible = true;
+                if (localTrajLine) localTrajLine.visible = true;
+                if (cloudRegisteredCloud) cloudRegisteredCloud.visible = true;
+                if (targetPointMesh) targetPointMesh.visible = true;
+                setReceive('global_points', true);
+                setReceive('path', true);
+                setReceive('localization', true);
+                setReceive('cloud_registered', true);
+                socket.emit('request_global_points');
+            }
+        }
+
+        async function postMode(url, enabled) {
+            try {
+                const resp = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: !!enabled })
+                });
+                return await resp.json().catch(() => null);
+            } catch (e) {
+                return null;
+            }
+        }
+
+        async function refreshModeFromServer() {
+            try {
+                const resp = await fetch('/api/mode');
+                const data = await resp.json();
+                if (data && data.mode) {
+                    applyModeUI(data.mode);
+                }
+            } catch (e) {}
+        }
+
+        if (btnStartMapping) {
+            btnStartMapping.addEventListener('click', async () => {
+                await postMode('/api/mapping', true);
+                refreshModeFromServer();
+            });
+        }
+
+        if (btnStartNavigation) {
+            btnStartNavigation.addEventListener('click', async () => {
+                await postMode('/api/navigation', true);
+                refreshModeFromServer();
+            });
+        }
+
+        if (btnStopMode) {
+            btnStopMode.addEventListener('click', async () => {
+                if (serverMode === 'mapping') await postMode('/api/mapping', false);
+                if (serverMode === 'navigation') await postMode('/api/navigation', false);
+                refreshModeFromServer();
+            });
+        }
 
         if (btnStartMotion) {
             btnStartMotion.addEventListener('click', () => {
@@ -509,12 +685,12 @@
         toggleLocalTraj.addEventListener('change', (e) => {
             if (localTrajLine) localTrajLine.visible = e.target.checked;
         });
-        toggleMapBox.addEventListener('change', (e) => {
-            if (mapBoxMesh) mapBoxMesh.visible = e.target.checked;
-        });
-        toggleScanBox.addEventListener('change', (e) => {
-            if (scanBoxMesh) scanBoxMesh.visible = e.target.checked;
-        });
+        // toggleMapBox.addEventListener('change', (e) => {
+        //     if (mapBoxMesh) mapBoxMesh.visible = e.target.checked;
+        // });
+        // toggleScanBox.addEventListener('change', (e) => {
+        //     if (scanBoxMesh) scanBoxMesh.visible = e.target.checked;
+        // });
         togglePath.addEventListener('change', (e) => {
             if (pathLine) pathLine.visible = e.target.checked;
         });
@@ -613,8 +789,76 @@
             camera.position.set(c.x + r * k, c.y + r * k, c.z + r * k);
         }
 
-        let cloudRegisteredVoxelMap = null;
-        function accumulateVoxel(positions) { return positions; }
+        const mappingAccum = {
+            voxelSize: 0.1,
+            maxVoxels: 200000,
+            voxels: new Map(),
+            dirty: false,
+            lastFlush: 0
+        };
+
+        function resetMappingAccum() {
+            mappingAccum.voxels = new Map();
+            mappingAccum.dirty = false;
+            mappingAccum.lastFlush = 0;
+        }
+
+        function voxelKey(x, y, z, vs) {
+            const ix = Math.floor(x / vs);
+            const iy = Math.floor(y / vs);
+            const iz = Math.floor(z / vs);
+            return `${ix},${iy},${iz}`;
+        }
+
+        function accumulateMappingPoints(positions) {
+            const vs = mappingAccum.voxelSize;
+            const vox = mappingAccum.voxels;
+            const n = Math.floor(positions.length / 3);
+            for (let i = 0; i < n; i++) {
+                const x = positions[i * 3];
+                const y = positions[i * 3 + 1];
+                const z = positions[i * 3 + 2];
+                const k = voxelKey(x, y, z, vs);
+                if (vox.has(k)) continue;
+                vox.set(k, [x, y, z]);
+                if (vox.size > mappingAccum.maxVoxels) {
+                    const over = vox.size - mappingAccum.maxVoxels;
+                    let removed = 0;
+                    for (const kk of vox.keys()) {
+                        vox.delete(kk);
+                        removed++;
+                        if (removed >= over) break;
+                    }
+                }
+            }
+            mappingAccum.dirty = true;
+        }
+
+        function flushMappingCloud() {
+            if (!mappingAccum.dirty) return;
+            const vox = mappingAccum.voxels;
+            const out = new Float32Array(vox.size * 3);
+            let idx = 0;
+            for (const v of vox.values()) {
+                out[idx++] = v[0];
+                out[idx++] = v[1];
+                out[idx++] = v[2];
+            }
+            if (!cloudRegisteredCloud) {
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.BufferAttribute(out, 3));
+                const material = new THREE.PointsMaterial({ color: 0x00ff00, size: 0.05, sizeAttenuation: true });
+                cloudRegisteredCloud = new THREE.Points(geometry, material);
+                cloudRegisteredCloud.rotation.x = -Math.PI / 2;
+                cloudRegisteredCloud.visible = toggleRegistered.checked;
+                scene.add(cloudRegisteredCloud);
+            } else {
+                cloudRegisteredCloud.geometry.setAttribute('position', new THREE.BufferAttribute(out, 3));
+                cloudRegisteredCloud.geometry.attributes.position.needsUpdate = true;
+                cloudRegisteredCloud.visible = toggleRegistered.checked;
+            }
+            mappingAccum.dirty = false;
+        }
 
         socket.on('connect_error', (err) => {
             console.error('Connection Error:', err);
@@ -626,6 +870,7 @@
             statusEl.textContent = 'Connected';
             statusEl.style.color = '#0f0';
             console.log('Connected to server');
+            refreshModeFromServer();
         });
 
         socket.on('disconnect', () => {
@@ -648,6 +893,7 @@
         });
 
         socket.on('global_points', async (data) => {
+            if (uiMode === 'mapping') return;
             // Always update if data is received
             
             const now = performance.now();
@@ -683,6 +929,7 @@
 
         // Handle Localization (Robot Position)
         socket.on('localization', (data) => {
+            if (uiMode === 'mapping') return;
             const now = performance.now();
             if (now - lastTs.localization < minInterval.localization) return;
             lastTs.localization = now;
@@ -787,6 +1034,18 @@
                 }
                 posOut = out;
             }
+            if (uiMode === 'mapping') {
+                accumulateMappingPoints(posOut);
+                const regCountEl = document.getElementById('cloud-registered-count');
+                if (regCountEl) regCountEl.textContent = mappingAccum.voxels.size;
+                const now = performance.now();
+                if (now - mappingAccum.lastFlush > 200) {
+                    flushMappingCloud();
+                    mappingAccum.lastFlush = now;
+                }
+                if (cloudRegisteredCloud) cloudRegisteredCloud.visible = toggleRegistered.checked;
+                return;
+            }
             const numPoints = positions.length / 3;
             document.getElementById('cloud-registered-count').textContent = numPoints;
             if (!cloudRegisteredCloud) {
@@ -810,6 +1069,7 @@
         });
 
         socket.on('occupancy_inflate', async (data) => {
+            if (uiMode === 'mapping') return;
             const positions = await toFloat32Async(data);
             if (!positions) return;
             const numPointsOcc = positions.length / 3;
@@ -831,6 +1091,7 @@
         });
 
         socket.on('local_traj', (data) => {
+            if (uiMode === 'mapping') return;
             if (!data || !data.points) return;
             const trajCountEl = document.getElementById('local-traj-count');
             if (trajCountEl) trajCountEl.textContent = data.points.length;
@@ -849,6 +1110,7 @@
 
         // Handle Path
         socket.on('path', (data) => {
+            if (uiMode === 'mapping') return;
             if (pathLine) scene.remove(pathLine);
             
             const pathPoints = data.path;
@@ -867,44 +1129,45 @@
             scene.add(pathLine);
         });
 
-        // Handle Submap Boxes (OBB visualization)
-        socket.on('submap_boxes', (data) => {
-            if (!data) return;
-            const makeOrUpdateBox = (boxData, existingMesh, colorHex) => {
-                if (!boxData) return existingMesh;
-                const pos = boxData.position;
-                const ori = boxData.orientation;
-                const ext = boxData.extent;
-                if (!existingMesh) {
-                    const geometry = new THREE.BoxGeometry(ext.x, ext.z, ext.y); // Map ROS (x,y,z) to Three (x,z,y) lengths
-                    const material = new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.25, wireframe: false });
-                    existingMesh = new THREE.Mesh(geometry, material);
-                    scene.add(existingMesh);
-                } else {
-                    // If extents changed, update geometry
-                    const needResize = (
-                        existingMesh.geometry.parameters.width !== ext.x ||
-                        existingMesh.geometry.parameters.height !== ext.z ||
-                        existingMesh.geometry.parameters.depth !== ext.y
-                    );
-                    if (needResize) {
-                        existingMesh.geometry.dispose();
-                        existingMesh.geometry = new THREE.BoxGeometry(ext.x, ext.z, ext.y);
-                    }
-                }
-                existingMesh.position.set(pos.x, pos.z, -pos.y);
-                existingMesh.setRotationFromQuaternion(new THREE.Quaternion(ori.x, ori.z, -ori.y, ori.w));
-                return existingMesh;
-            };
-
-            mapBoxMesh = makeOrUpdateBox(data.map_box, mapBoxMesh, 0xFFA500);
-            scanBoxMesh = makeOrUpdateBox(data.scan_box, scanBoxMesh, 0x00FF00);
-            if (mapBoxMesh) mapBoxMesh.visible = toggleMapBox.checked;
-            if (scanBoxMesh) scanBoxMesh.visible = toggleScanBox.checked;
-        });
+        // Handle Submap Boxes (OBB visualization) - DISABLED
+        // socket.on('submap_boxes', (data) => {
+        //     if (!data) return;
+        //     const makeOrUpdateBox = (boxData, existingMesh, colorHex) => {
+        //         if (!boxData) return existingMesh;
+        //         const pos = boxData.position;
+        //         const ori = boxData.orientation;
+        //         const ext = boxData.extent;
+        //         if (!existingMesh) {
+        //             const geometry = new THREE.BoxGeometry(ext.x, ext.z, ext.y); // Map ROS (x,y,z) to Three (x,z,y) lengths
+        //             const material = new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.25, wireframe: false });
+        //             existingMesh = new THREE.Mesh(geometry, material);
+        //             scene.add(existingMesh);
+        //         } else {
+        //             // If extents changed, update geometry
+        //             const needResize = (
+        //                 existingMesh.geometry.parameters.width !== ext.x ||
+        //                 existingMesh.geometry.parameters.height !== ext.z ||
+        //                 existingMesh.geometry.parameters.depth !== ext.y
+        //             );
+        //             if (needResize) {
+        //                 existingMesh.geometry.dispose();
+        //                 existingMesh.geometry = new THREE.BoxGeometry(ext.x, ext.z, ext.y);
+        //             }
+        //         }
+        //         existingMesh.position.set(pos.x, pos.z, -pos.y);
+        //         existingMesh.setRotationFromQuaternion(new THREE.Quaternion(ori.x, ori.z, -ori.y, ori.w));
+        //         return existingMesh;
+        //     };
+        //
+        //     mapBoxMesh = makeOrUpdateBox(data.map_box, mapBoxMesh, 0xFFA500);
+        //     scanBoxMesh = makeOrUpdateBox(data.scan_box, scanBoxMesh, 0x00FF00);
+        //     if (mapBoxMesh) mapBoxMesh.visible = toggleMapBox.checked;
+        //     if (scanBoxMesh) scanBoxMesh.visible = toggleScanBox.checked;
+        // });
 
         // Handle Target Point
         socket.on('target_point', (data) => {
+            if (uiMode === 'mapping') return;
             if (targetPointMesh) {
                 // Update position
                 // ROS (x, y, z) -> Three (x, z, -y)

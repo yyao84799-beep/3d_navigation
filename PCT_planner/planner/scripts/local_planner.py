@@ -26,7 +26,7 @@ class LocalPlanner:
         self.lookahead_distance = 0.9 # Reduced from 1.0 to 0.5 to reduce corner cutting
         self.max_speed = rospy.get_param("~max_speed", 1.5)
         self.max_walk_speed = rospy.get_param("~max_walk_speed", 0.6)
-        self.kp_angular = rospy.get_param("~kp_angular", 0.45) # Increased from 0.4 to 0.8 for faster turning response
+        self.kp_angular = rospy.get_param("~kp_angular", 0.46) # Increased from 0.4 to 0.8 for faster turning response
         self.last_speed = 0.0
         self.MAX_ACCEL = 0.3
         self.k_dist = rospy.get_param("~k_dist", 0.8)

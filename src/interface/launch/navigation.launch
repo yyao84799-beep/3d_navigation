@@ -1,0 +1,31 @@
+<launch>
+
+  <!-- 1️⃣ FAST-LIO 定位 -->
+  <include file="$(find fast_lio_localization)/launch/localization_mid360.launch" />
+
+  <!-- 2️⃣ 全局规划 -->
+  <node
+    pkg="pct_planner"
+    type="global_planner.py"
+    name="global_planner"
+    output="screen"
+    args="--scene Common" />
+
+  <!-- 3️⃣ 局部规划 -->
+  <node
+    pkg="pct_planner"
+    type="local_planner.py"
+    name="local_planner"
+    output="screen" />
+
+  <!-- 4️⃣ 速度平滑器 -->
+  <include file="$(find velocity_smoother_ema)/launch/velocity_smoother_ema.launch" />
+
+  <!-- 5️⃣ 前方障碍物距离 -->
+  <node
+    pkg="fast_lio_localization"
+    type="front_obstacle_distance.py"
+    name="front_obstacle_distance"
+    output="screen" />
+
+</launch>

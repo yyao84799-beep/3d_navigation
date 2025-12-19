@@ -4,8 +4,8 @@ import threading
 import asyncio
 import rospy
 import sensor_msgs.point_cloud2 as pc2
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sensor_msgs.msg import PointCloud2
@@ -14,6 +14,12 @@ from geometry_msgs.msg import PoseWithCovarianceStamped, PointStamped, Point
 from std_msgs.msg import Bool, String
 from visualization_msgs.msg import Marker
 from tf.transformations import quaternion_matrix, quaternion_multiply
+import os
+import time
+import urllib.request
+
+from pydantic import BaseModel
+
 
 # --- ROS Configuration ---
 # Global storage for latest data
@@ -26,13 +32,12 @@ latest_data = {
     "arrival_status": None,
     "waypoint_queue": [],
     "target_point": None, # New: Real-time lookahead target
-    "baselink2map": None,
-    "odom2map": None,
-    "submap_boxes": None,
     "map_to_odom": None
 }
 
 import numpy as np
+mode_lock = threading.Lock()
+mode_state = {"mode": "idle", "mapping": False, "navigation": False}
 # ROS Callbacks
 def target_point_callback(msg):
     latest_data["target_point"] = {"x": msg.x, "y": msg.y, "z": msg.z}
@@ -183,47 +188,6 @@ def mat_to_pose(T):
     ori = {"x": float(qx), "y": float(qy), "z": float(qz), "w": float(qw)}
     return pos, ori
 
-def update_submap_boxes():
-    try:
-        b = latest_data.get("baselink2map")
-        o = latest_data.get("odom2map")
-        if not b or not o:
-            return
-        # Build matrices
-        Tb = to_mat44_from_pose(b["position"], b["orientation"])  # map -> base_link pose as map frame coords
-        To = to_mat44_from_pose(o["position"], o["orientation"])  # map -> odom pose as map frame coords
-        import numpy as _np
-        # Compute baselink->odom in odom frame: T_odom_baselink = To^{-1} * Tb
-        To_inv = _np.linalg.inv(To)
-        T_odom_baselink = _np.dot(To_inv, Tb)
-        # Map box (history submap) pose is Tb in map frame
-        map_pos, map_ori = mat_to_pose(Tb)
-        # Scan box (perception submap) pose in map frame: T_map_scan = To * T_odom_baselink_center
-        # We already have T_odom_baselink; convert it into map frame by To * T_odom_baselink
-        T_map_scan = _np.dot(To, T_odom_baselink)
-        scan_pos, scan_ori = mat_to_pose(T_map_scan)
-        extent = {"x": 6.0, "y": 6.0, "z": 4.0}
-        latest_data["submap_boxes"] = {
-            "map_box": {"position": map_pos, "orientation": map_ori, "extent": extent},
-            "scan_box": {"position": scan_pos, "orientation": scan_ori, "extent": extent}
-        }
-    except Exception:
-        pass
-
-def baselink2map_callback(msg):
-    pose = msg.pose.pose
-    position = {"x": pose.position.x, "y": pose.position.y, "z": pose.position.z}
-    orientation = {"x": pose.orientation.x, "y": pose.orientation.y, "z": pose.orientation.z, "w": pose.orientation.w}
-    latest_data["baselink2map"] = {"position": position, "orientation": orientation}
-    update_submap_boxes()
-
-def odom2map_callback(msg):
-    pose = msg.pose.pose
-    position = {"x": pose.position.x, "y": pose.position.y, "z": pose.position.z}
-    orientation = {"x": pose.orientation.x, "y": pose.orientation.y, "z": pose.orientation.z, "w": pose.orientation.w}
-    latest_data["odom2map"] = {"position": position, "orientation": orientation}
-    update_submap_boxes()
-
 def map_to_odom_callback(msg):
     pose = msg.pose.pose
     position = {"x": pose.position.x, "y": pose.position.y, "z": pose.position.z}
@@ -234,8 +198,6 @@ def ros_thread_entry():
     rospy.init_node('fastapi_visualizer', anonymous=True, disable_signals=True)
     rospy.Subscriber('/map', PointCloud2, global_points_callback)
     rospy.Subscriber('/localization', Odometry, localization_callback)
-    rospy.Subscriber('/baselink2map', Odometry, baselink2map_callback)
-    rospy.Subscriber('/odom2map', Odometry, odom2map_callback)
     rospy.Subscriber('/map_to_odom', Odometry, map_to_odom_callback)
     # rospy.Subscriber('/cloud_registered_body', PointCloud2, cur_scan_callback) # Disabled
     rospy.Subscriber('/cloud_registered', PointCloud2, cloud_registered_callback)
@@ -248,6 +210,8 @@ def ros_thread_entry():
     globals()['initialpose_pub'] = rospy.Publisher('/initialpose', PoseWithCovarianceStamped, queue_size=1)
     globals()['clicked_point_pub'] = rospy.Publisher('/clicked_point', PointStamped, queue_size=1)
     globals()['motion_control_pub'] = rospy.Publisher('/motion_control', Bool, queue_size=1, latch=True)
+    globals()['build_launch_pub'] = rospy.Publisher('build_start_stop_launch', Bool, queue_size=1, latch=True)
+    globals()['nav_launch_pub'] = rospy.Publisher('nav_start_stop_launch', Bool, queue_size=1, latch=True)
     rospy.spin()
 
 # Start ROS thread
@@ -260,9 +224,6 @@ sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
 app = FastAPI()
 socket_app = socketio.ASGIApp(sio, app)
 
-# Mount static files
-# Use absolute path or ensure CWD is correct. Let's use absolute path to be safe.
-import os
 base_dir = os.path.dirname(os.path.abspath(__file__))
 static_dir = os.path.join(base_dir, "../frontend/static")
 template_dir = os.path.join(base_dir, "../frontend")
@@ -270,9 +231,85 @@ template_dir = os.path.join(base_dir, "../frontend")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 templates = Jinja2Templates(directory=template_dir)
 
+def _publish_toggle(pub_name: str, enabled: bool):
+    pub = globals().get(pub_name)
+    if pub is None:
+        return False
+    msg = Bool()
+    msg.data = bool(enabled)
+    try:
+        pub.publish(msg)
+        return True
+    except Exception:
+        return False
+
+def _set_mode(mode: str, enabled: bool):
+    mode = (mode or "").strip().lower()
+    enabled = bool(enabled)
+    if mode not in ("mapping", "navigation"):
+        return {"ok": False, "error": "invalid_mode"}
+    with mode_lock:
+        if mode == "mapping":
+            if enabled:
+                _publish_toggle("nav_launch_pub", False)
+                mode_state["navigation"] = False
+            ok = _publish_toggle("build_launch_pub", enabled)
+            mode_state["mapping"] = enabled
+        else:
+            if enabled:
+                _publish_toggle("build_launch_pub", False)
+                mode_state["mapping"] = False
+            ok = _publish_toggle("nav_launch_pub", enabled)
+            mode_state["navigation"] = enabled
+        if mode_state["mapping"]:
+            mode_state["mode"] = "mapping"
+        elif mode_state["navigation"]:
+            mode_state["mode"] = "navigation"
+        else:
+            mode_state["mode"] = "idle"
+    return {"ok": bool(ok), "state": dict(mode_state)}
+
+class ToggleRequest(BaseModel):
+    enabled: bool = True
+
+@app.get("/api/mode")
+async def get_mode():
+    return dict(mode_state)
+
+@app.post("/api/mapping")
+async def set_mapping(req: ToggleRequest):
+    return _set_mode("mapping", req.enabled)
+
+@app.post("/api/navigation")
+async def set_navigation(req: ToggleRequest):
+    return _set_mode("navigation", req.enabled)
+
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+def generate_frames():
+    base_url = os.environ.get('SAFEHAT_BASE_URL', 'http://127.0.0.1:8001').rstrip('/')
+    frame_url = f"{base_url}/frame.jpg"
+    while True:
+        try:
+            with urllib.request.urlopen(frame_url, timeout=2.0) as resp:
+                if getattr(resp, 'status', 200) != 200:
+                    time.sleep(0.1)
+                    continue
+                frame_bytes = resp.read()
+                if not frame_bytes:
+                    time.sleep(0.05)
+                    continue
+        except Exception:
+            time.sleep(0.1)
+            continue
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+@app.get("/video_feed")
+async def video_feed():
+    return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @sio.event
 async def connect(sid, environ):
@@ -305,8 +342,6 @@ async def connect(sid, environ):
         await sio.emit('waypoint_queue', {'queue': latest_data["waypoint_queue"]}, room=sid)
     if latest_data["target_point"]:
         await sio.emit('target_point', latest_data["target_point"], room=sid)
-    if latest_data.get("submap_boxes"):
-        await sio.emit('submap_boxes', latest_data["submap_boxes"], room=sid)
     if latest_data.get("map_to_odom"):
         await sio.emit('map_to_odom', latest_data["map_to_odom"], room=sid)
     if latest_data.get("occupancy_inflate"):
@@ -474,6 +509,24 @@ async def set_motion_control(sid, data):
             motion_control_pub.publish(msg)
     except Exception as e:
         pass
+
+@sio.on('set_mapping')
+async def sio_set_mapping(sid, data):
+    enabled = True
+    if isinstance(data, dict):
+        enabled = bool(data.get("enabled", True))
+    return _set_mode("mapping", enabled)
+
+@sio.on('set_navigation')
+async def sio_set_navigation(sid, data):
+    enabled = True
+    if isinstance(data, dict):
+        enabled = bool(data.get("enabled", True))
+    return _set_mode("navigation", enabled)
+
+@sio.on('get_mode')
+async def sio_get_mode(sid):
+    return dict(mode_state)
 
 if __name__ == "__main__":
     # Run with: uvicorn app_fastapi:socket_app --host 0.0.0.0 --port 5000 --reload
