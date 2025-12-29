@@ -19,4 +19,4 @@ class SceneCommon():
     trav.standable_ratio = 0.05  # 邻域内“可站立格”比例下限，越小越宽松
     trav.cost_barrier = 60.0   # 障碍代价值(屏障)，被判障碍的格子代价
     trav.safe_margin = 0.15    # 安全距离(米)，用于膨胀半径，越大越“加粗”障碍
-    trav.inflation = 0.3      # 膨胀内核(米)，与safe_margin共同决定膨胀范围
+    trav.inflation = 0.1      # 膨胀内核(米)，与safe_margin共同决定膨胀范围

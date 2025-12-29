@@ -24,11 +24,15 @@ bool OfflineElePlanner::Plan(const Eigen::Vector3i& start,
   }
 
   if (optimize) {
+    bool success = false;
     path_ = path_finder_.GetPathPoints();
+    
+    if (path_.empty())//判断为空则直接跳出
+    return success;
+
     path_.front().ref_v = 1;
     path_.back().ref_v = 1;
-
-    bool success = false;
+    
     if (use_quintic_) {
       success = trajectory_optimizer_wnoj_.GenerateTrajectory(path_, 200);
     } else {

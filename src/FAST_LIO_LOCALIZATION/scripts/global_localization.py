@@ -115,6 +115,10 @@ def crop_global_map_in_FOV(global_map, pose_estimation, cur_odom):
 
 def global_localization(pose_estimation):
     global global_map, cur_scan, cur_odom, T_map_to_odom
+    if global_map is None:
+        rospy.logwarn("Global map not ready!")
+        return False
+
     # 用icp配准
     # print(global_map, cur_scan, T_map_to_odom)
     rospy.loginfo('Global localization by scan-to-map matching......')
@@ -172,7 +176,7 @@ def initialize_global_map(pc_msg):
     global_map = o3d.geometry.PointCloud()
     global_map.points = o3d.utility.Vector3dVector(msg_to_array(pc_msg)[:, :3])
     global_map = voxel_down_sample(global_map, MAP_VOXEL_SIZE)
-    rospy.loginfo('Global map received.')
+    rospy.loginfo('Global map updated.')
 
 
 def cb_save_cur_odom(odom_msg):
@@ -257,9 +261,9 @@ if __name__ == '__main__':
     rospy.Subscriber('/Odometry', Odometry, cb_save_cur_odom, queue_size=1)
     rospy.Subscriber('/initialpose', PoseWithCovarianceStamped, initial_pose_callback, queue_size=10)
 
-    # 初始化全局地图
+    # 动态订阅全局地图
+    rospy.Subscriber('/map', PointCloud2, initialize_global_map, queue_size=1)
     rospy.logwarn('Waiting for global map......')
-    initialize_global_map(rospy.wait_for_message('map', PointCloud2))
 
     # 初始化
     # while not initialized:
@@ -283,7 +287,7 @@ if __name__ == '__main__':
     rospy.logwarn('Waiting for initial pose....')
 
     while not rospy.is_shutdown():
-        if not initialized and initial_pose is not None and cur_scan is not None:
+        if not initialized and initial_pose is not None and cur_scan is not None and global_map is not None:
             try:
                 rospy.logwarn('Attempting localization...')
                 initialized = global_localization(initial_pose)
