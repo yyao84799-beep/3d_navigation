@@ -718,12 +718,18 @@ void GridMap::depthPoseCallback(const sensor_msgs::ImageConstPtr &img,
 }
 void GridMap::odomCallback(const nav_msgs::OdometryConstPtr &odom)
 {
-  if (md_.has_first_depth_)
-    return;
+  // if (md_.has_first_depth_)
+  //   return;
 
   md_.camera_pos_(0) = odom->pose.pose.position.x;
   md_.camera_pos_(1) = odom->pose.pose.position.y;
   md_.camera_pos_(2) = odom->pose.pose.position.z;
+  
+  // Debug print
+  // static int count = 0;
+  // if (count++ % 50 == 0) {
+  //   std::cout << "[GridMap] Odom update: " << md_.camera_pos_.transpose() << std::endl;
+  // }
 
   md_.has_odom_ = true;
 }
@@ -747,6 +753,14 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &img)
     std::cout << "no odom!" << std::endl;
     return;
   }
+  
+  // Debug print
+  static int cloud_cnt = 0;
+  if (cloud_cnt++ % 20 == 0) {
+      std::cout << "[GridMap] Cloud Callback. Cam Pos: " << md_.camera_pos_.transpose() << std::endl;
+      std::cout << "[GridMap] Cloud Frame: " << img->header.frame_id << std::endl;
+  }
+
   //點雲轉換關係
   tf::StampedTransform transform_odom2map;
   transform_odom2map.setIdentity();//将变换矩阵初始化为单位阵
@@ -793,9 +807,20 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &img)
   for (size_t i = 0; i < latest_cloud.points.size(); ++i)
   {
     pt = latest_cloud.points[i];
-    p3d(0) = pt.x, p3d(1) = pt.y, p3d(2) = pt.z;
+    
+    // --- 修改开始: 先变换到世界坐标系 ---
+    // 原始点
+    tf::Point tf_pt_raw(pt.x, pt.y, pt.z);
+    // 变换后的点 (Map Frame)
+    tf::Point tf_pt_map = transform_odom2map * tf_pt_raw;
+    
+    p3d(0) = tf_pt_map.x();
+    p3d(1) = tf_pt_map.y();
+    p3d(2) = tf_pt_map.z();
+    // --- 修改结束 ---
 
     /* point inside update range */
+    // 现在 p3d 是 Map 坐标系下的，camera_pos 也是 Map 坐标系下的，可以安全相减
     Eigen::Vector3d devi = p3d - md_.camera_pos_;
     Eigen::Vector3i inf_pt;
     // 如果点在更新范围内，则进行膨胀处理
@@ -809,12 +834,18 @@ void GridMap::cloudCallback(const sensor_msgs::PointCloud2ConstPtr &img)
           for (int z = -inf_step_z; z <= inf_step_z; ++z)
           {
 
-            p3d_inf(0) = pt.x + x * mp_.resolution_;
-            p3d_inf(1) = pt.y + y * mp_.resolution_;
-            p3d_inf(2) = pt.z + z * mp_.resolution_;
+            // 膨胀是基于已经变换后的 p3d 进行的
+            p3d_inf(0) = p3d(0) + x * mp_.resolution_;
+            p3d_inf(1) = p3d(1) + y * mp_.resolution_;
+            p3d_inf(2) = p3d(2) + z * mp_.resolution_;
 
-            tf::Point tf_pt = transform_odom2map * tf::Point(p3d_inf.x(), p3d_inf.y(), p3d_inf.z());
-            p3d_inf = Eigen::Vector3d(tf_pt.x(), tf_pt.y(), tf_pt.z());
+            // 注意：这里不需要再乘 transform_odom2map 了，因为 p3d 已经是变换过的了
+            // 之前的代码是先膨胀原始点，再变换。现在是先变换原始点，再膨胀。
+            // 对于旋转不大的情况，先膨胀再变换 和 先变换再膨胀 差别不大（因为膨胀是球形或轴对齐立方体）。
+            // 但为了逻辑简单，我们直接在 Map 系下膨胀轴对齐立方体。
+            
+            // tf::Point tf_pt = transform_odom2map * tf::Point(p3d_inf.x(), p3d_inf.y(), p3d_inf.z());
+            // p3d_inf = Eigen::Vector3d(tf_pt.x(), tf_pt.y(), tf_pt.z());
 
             max_x = max(max_x, p3d_inf(0));
             max_y = max(max_y, p3d_inf(1));
