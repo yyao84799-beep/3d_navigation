@@ -99,6 +99,8 @@ namespace ego_planner
       end_vel_.setZero();
       have_target_ = true;
       have_new_target_ = true;
+      trigger_ = true;
+      start_pt_ = odom_pos_;
 
       /*** FSM ***/
       // if (exec_state_ == WAIT_TARGET)
@@ -188,6 +190,8 @@ namespace ego_planner
       end_vel_.setZero();
       have_target_ = true;
       have_new_target_ = true;
+      trigger_ = true;
+      start_pt_ = odom_pos_;
 
       /*** FSM ***/
       if (exec_state_ == WAIT_TARGET)

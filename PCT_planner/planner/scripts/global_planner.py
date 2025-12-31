@@ -34,6 +34,7 @@ def localization_callback(msg):
     start_height = msg.pose.pose.position.z-1
 
 cfg = Config()
+global_z_offset = 0.25 # 用户可以通过修改此值来抬高或降低全局路径的高度
 
 if args.scene == 'Spiral':
     tomo_file = 'spiral0.3_2'
@@ -260,6 +261,7 @@ def pct_plan():
     if traj_3d is not None:
         # 后处理：楼梯直线化
         traj_3d = post_process_path(traj_3d)
+        traj_3d[:, 2] += global_z_offset # 应用全局Z轴偏移
         path_pub.publish(traj2ros(traj_3d))
         print("Trajectory published")
 
